@@ -26,12 +26,8 @@ class DistributedEnvironment:
     master_port: int
     master_addr: str
 
-    @property
-    def is_main(self) -> bool:
-        return self.global_rank == 0
 
-
-def setup_distributed(*, min_master_port: int = 20_000, max_master_port: int = 60_000) -> DistributedEnvironment:
+def distributed_environment() -> DistributedEnvironment:
     if os.getenv("LOCAL_RANK") is not None:  # torchrun job
         env = DistributedEnvironment(
             global_rank=int(os.environ["RANK"]),
@@ -43,7 +39,7 @@ def setup_distributed(*, min_master_port: int = 20_000, max_master_port: int = 6
     if os.getenv("SLURM_JOB_ID") is not None:  # Slurm job
         scontrol_cmd = ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]]
         master_addr = subprocess.check_output(scontrol_cmd, text=True).split()[0]
-        master_port = random.Random(int(os.environ["SLURM_JOB_ID"])).randint(min_master_port, max_master_port)
+        master_port = random.Random(int(os.environ["SLURM_JOB_ID"])).randint(20_000, 60_000)
         env = DistributedEnvironment(
             global_rank=int(os.environ["SLURM_PROCID"]),
             local_rank=int(os.environ["SLURM_LOCALID"]),
@@ -56,7 +52,7 @@ def setup_distributed(*, min_master_port: int = 20_000, max_master_port: int = 6
             global_rank=0,
             local_rank=0,
             world_size=1,
-            master_port=random.Random(-1).randint(min_master_port, max_master_port),
+            master_port=random.Random(-1).randint(20_000, 60_000),
             master_addr="127.0.0.1",
         )
     os.environ["RANK"] = str(env.global_rank)
@@ -64,10 +60,14 @@ def setup_distributed(*, min_master_port: int = 20_000, max_master_port: int = 6
     os.environ["WORLD_SIZE"] = str(env.world_size)
     os.environ["MASTER_PORT"] = str(env.master_port)
     os.environ["MASTER_ADDR"] = env.master_addr
-    logger.debug("%s processes, local rank %s, global rank %s", env.world_size, env.local_rank, env.global_rank)
+    return env
+
+
+def setup_distributed() -> None:
+    env = distributed_environment()
+    logger.debug("World size %s, local rank %s, global rank %s", env.world_size, env.local_rank, env.global_rank)
     dist.init_process_group(backend="nccl")
     logger.debug("DDP initialized")
-    return env
 
 
 def setup_environment(**kwargs: str) -> None:
@@ -100,10 +100,9 @@ def setup_pytorch() -> None:
     torch.autograd.set_detect_anomaly(mode=False, check_nan=True)
 
 
-def setup_training(seed: int) -> DistributedEnvironment:
+def setup_training(seed: int) -> None:
     init_logger()
-    env = setup_distributed()
-    set_seed(seed + env.global_rank)
+    setup_distributed()
+    set_seed(seed + dist.get_rank())
     setup_pytorch()
     setup_environment()
-    return env

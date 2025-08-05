@@ -67,39 +67,41 @@ def launch_validation(cfg: Config, resume: ResumeConfig) -> None:
 def train(cfg: Config) -> None:  # noqa: PLR0915, C901
     with ExitStack() as stack:
         logger.info("Starting job")
-        env = setup_training(cfg.run.random_seed)
+        setup_training(cfg.run.random_seed)
         stack.callback(dist.destroy_process_group)
-        device = torch.device(f"cuda:{env.local_rank}")
-        dtype = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[cfg.optimizer.dtype]
-        if env.is_main:
+        global_rank, world_size = dist.get_rank(), dist.get_world_size()
+        is_main = global_rank == 0
+        if is_main:
             init_wandb(cfg)
 
         logger.info("Building model, optimizer, and dataloaders")
+        device = torch.device(f"cuda:{os.environ['LOCAL_RANK']}")
+        dtype = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[cfg.optimizer.dtype]
         model = build_model(cfg=cfg.model, model_type=cfg.run.model_type, checkpoint=cfg.run.init_ckpt)
         model = model.to(device).train()
         optimizer, scaler, scheduler = build_optimizer(model, cfg.optimizer)
         loader = build_dataloader(
             cfg.data,
             cfg.masking,
-            mask_and_crop_seed=cfg.run.random_seed + env.global_rank,
+            mask_and_crop_seed=cfg.run.random_seed + global_rank,
             conv_layer_config=cfg.model.extractor_conv_layer_config,
         )
-        dist.barrier(device_ids=[env.local_rank])
+        dist.barrier(device_ids=[device.index])
         ckpt = Checkpointer(cfg.run.dir, cfg.run.save_interval, cfg.run.keep_latest)
         ckpt.init_state(model=model, optimizer=optimizer, scheduler=scheduler, scaler=scaler)
         resuming = ckpt.load_existing_run()
         step, epoch = int(ckpt.step), int(ckpt.epoch)
 
-        if not resuming and env.is_main and ckpt.save(step, epoch):
+        if not resuming and is_main and ckpt.save(step, epoch):
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
 
         if cfg.run.compile:
             model.compile(dynamic=True)
             model._inner_ema = torch.compile(model._inner_ema)
-        ddp_model = DistributedDataParallel(model, device_ids=[env.local_rank], find_unused_parameters=True)
+        ddp_model = DistributedDataParallel(model, device_ids=[device.index], find_unused_parameters=True)
         meters = AverageMeters(["loss", "grad_norm", "batch_size", "target_ppl", "pred_ppl"], device=device)
-        profiler = stack.enter_context(profiler_context(cfg.run.dir / "trace.html" if env.is_main else None))
-        pbar = stack.enter_context(tqdm(total=cfg.optimizer.max_steps, initial=step, disable=not env.is_main))
+        profiler = stack.enter_context(profiler_context(cfg.run.dir / "trace.html" if is_main else None))
+        pbar = stack.enter_context(tqdm(total=cfg.optimizer.max_steps, initial=step, disable=not is_main))
 
         logger.info("Starting training loop")
         while step < cfg.optimizer.max_steps:
@@ -120,7 +122,7 @@ def train(cfg: Config) -> None:  # noqa: PLR0915, C901
                     )
                 num_frames = torch.tensor(loss.size(0), dtype=torch.long, device=device)
                 dist.all_reduce(num_frames)
-                loss = loss.sum() * env.world_size / num_frames
+                loss = loss.sum() * world_size / num_frames
 
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -138,17 +140,17 @@ def train(cfg: Config) -> None:  # noqa: PLR0915, C901
                 meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
                 pbar.update()
 
-                if env.is_main and step % cfg.run.log_interval == 0:
+                if is_main and step % cfg.run.log_interval == 0:
                     infos = meters.pop() | {"lr": lr, "ema_decay": ema_decay * 1000, "step": step, "epoch": epoch}
                     wandb.log({f"train/{key}": value for key, value in infos.items()})
                     pbar.set_postfix(loss=infos["loss"], target_ppl=infos["target_ppl"], pred_ppl=infos["pred_ppl"])
-                if env.is_main and ckpt.save(step, epoch):
+                if is_main and ckpt.save(step, epoch):
                     launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
                     for val_metric in ckpt.find_new_metrics():
                         wandb.log(val_metric)
                 profiler.step()
 
-        if env.is_main:
+        if is_main:
             if ckpt.save_final(step, epoch):
                 launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
             wandb.finish()
