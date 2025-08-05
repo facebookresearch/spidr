@@ -1,0 +1,38 @@
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Ruff
+        uses: astral-sh/ruff-action@v3
+        with:
+          version-file: pyproject.toml
+
+      - name: typos
+        uses: crate-ci/typos@v1.34.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF#refs/tags/}" ./dist/*
+
+      - name: Upload to PyPI
+        run: uv publish -t ${{ secrets.PYPI_TOKEN }}
