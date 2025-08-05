@@ -1,0 +1,12 @@
+- Verify that we can license the code and the models under the MIT license. If not, update it in LICENSE, pyproject.toml, and README.md.
+- Create a https://github.com/facebookresearch/spidr repo ready to open-source
+- Add Maxime to the maintainers if possible
+- Add a PYPI_TOKEN secret to the repo
+- Upload the two checkpoints (spidr and dinosr from the paper) to FAIR S3 bucket. Only the model, not optimizer, etc.
+- Update the urls in spidr.models.utils.load_pretrained
+- Try if you can load the model with the new urls
+- Upload the paper to arXiv
+- Once the paper is available, update the citation in README.md and create a CITATION.cff file
+- Make this repo public: https://github.com/facebookresearch/spidr by force pushing the main branch without history
+- Update the image link in README.md to point to the full URL of the image in the repo
+- Create a tag 1.0.0 and push to trigger the release workflow and PyPI upload

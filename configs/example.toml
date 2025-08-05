@@ -1,0 +1,13 @@
+[run]
+workdir = "/path/to/workdir"
+wandb_mode = "offline"
+wandb_project = "spidr"
+wandb_name = "spidr-librispeech"
+model_type = "spidr"
+
+[data]
+manifest = "/path/to/manifests/train-full.csv"
+
+[validation]
+dev-clean.manifest = "/path/to/manifests/dev-clean.csv"
+dev-other.manifest = "/path/to/manifests/dev-other.csv"

@@ -1,0 +1,89 @@
+[build-system]
+requires = ["uv_build>=0.8.4,<0.9"]
+build-backend = "uv_build"
+
+[project]
+name = "spidr"
+version = "1.0.0"
+description = "Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Fundamental AI Research (FAIR) at Meta" }]
+keywords = ["speech", "machine learning"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26.4", "torch>=2.7.1"]
+
+[project.optional-dependencies]
+train = [
+    "polars>=1.31.0",
+    "submitit>=1.5.2",
+    "torchcodec>=0.4.0",
+    "tqdm>=4.67.1",
+    "viztracer>=1.0.3",
+    "wandb>=0.19.10",
+]
+
+[project.urls]
+github = "https://github.com/facebookresearch/spidr"
+
+[dependency-groups]
+dev = [
+    "fastabx>=0.4.1",
+    "ipykernel>=6.29.5",
+    "matplotlib>=3.10.3",
+    "polars>=1.31.0",
+    "ruff==0.12.3",
+    "scikit-learn>=1.7.0",
+    "scipy>=1.16.0",
+    "torchcodec>=0.4.0",
+    "typos>=1.31.1",
+]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+ignore = [
+    "COM812", # Incompatible format recommendation.
+    "D101",   # Class docstring.
+    "D102",   # Public method docstring.
+    "D103",   # Public function docstring.
+    "D105",   # Magic method docstring.
+    "D107",   # __init__ docstring.
+    "D203",   # Blank line before class.
+    "D213",   # Multi-line docstring second line.
+    "EM101",  # Exceptions can have literal string.
+    "EM102",  # f-string in exceptions are ok.
+    "ISC001", # Incompatible format recommendation.
+    "NPY002", # We use np.random.seed to set the seed just in case.
+    "PD011",  # Leads to false positives.
+    "PTH206", # Needed in polars expressions.
+    "S101",   # Asserts are ok.
+    "S311",   # Standard random is ok.
+    "S602",   # Subprocess is ok.
+    "S603",   # Subprocess is ok.
+    "TRY003", # Exceptions can have long error messages.
+]
+select = ["ALL"]
+
+[tool.ruff.lint.pep8-naming]
+extend-ignore-names = ["F"] # from torch.nn import functional as F
+
+[tool.ruff.lint.flake8-self]
+extend-ignore-names = ["_foreach_norm", "_appdirs", "_inner_ema"]
+
+[tool.ruff.lint.pylint]
+max-args = 10
+
+[tool.typos]
+default.extend-words = { interm = "interm", IY = "IY", arange = "arange" }

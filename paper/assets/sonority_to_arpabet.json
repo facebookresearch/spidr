@@ -1,0 +1,53 @@
+{
+    "fricative": [
+        "F",
+        "V",
+        "TH",
+        "DH",
+        "S",
+        "Z",
+        "SH",
+        "ZH",
+        "HH"
+    ],
+    "affricate": [
+        "CH",
+        "JH"
+    ],
+    "plosive": [
+        "P",
+        "B",
+        "T",
+        "D",
+        "K",
+        "G"
+    ],
+    "approximant": [
+        "L",
+        "R",
+        "Y",
+        "W"
+    ],
+    "nasal": [
+        "M",
+        "N",
+        "NG"
+    ],
+    "vowel": [
+        "AA",
+        "AE",
+        "AH",
+        "AO",
+        "AW",
+        "AY",
+        "EH",
+        "ER",
+        "EY",
+        "IH",
+        "IY",
+        "OW",
+        "OY",
+        "UH",
+        "UW"
+    ]
+}
