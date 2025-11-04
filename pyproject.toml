@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "spidr"
-version = "1.0.0"
+version = "0.1.0"
 description = "Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision"
 readme = "README.md"
 license = "CC-BY-NC-4.0"

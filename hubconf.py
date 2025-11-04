@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from torch.hub import _add_to_sys_path
+from torch.hub import _add_to_sys_path  # noqa: PLC2701
 
 dependencies = ["torch", "numpy"]
 

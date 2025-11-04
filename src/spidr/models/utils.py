@@ -183,9 +183,9 @@ def state_dict_from_dinosr_fairseq_checkpoint(checkpoint: dict[str, Any]) -> Ord
 def spidr_base(*, pretrained: bool = True, check_hash: bool = False, progress: bool = True) -> SpidR:
     model = SpidR(SpidRConfig())
     if pretrained:
-        url = ""
-        state_dict = load_state_dict_from_url(url, check_hash=check_hash, progress=progress)
-        model.load_state_dict(state_dict)
+        url = "https://dl.fbaipublicfiles.com/shared/devai/assets/models/spidr_base.pt"
+        checkpoint = load_state_dict_from_url(url, check_hash=check_hash, progress=progress, map_location="cpu")
+        model.load_state_dict(checkpoint["model"])
     model.eval()
     return model
 
@@ -193,9 +193,9 @@ def spidr_base(*, pretrained: bool = True, check_hash: bool = False, progress: b
 def dinosr_base_reproduced(*, pretrained: bool = True, check_hash: bool = False, progress: bool = True) -> DinoSR:
     model = DinoSR(DinoSRConfig())
     if pretrained:
-        url = ""
-        state_dict = load_state_dict_from_url(url, check_hash=check_hash, progress=progress)
-        model.load_state_dict(state_dict)
+        url = "https://dl.fbaipublicfiles.com/shared/devai/assets/models/dinosr_base_reproduced.pt"
+        checkpoint = load_state_dict_from_url(url, check_hash=check_hash, progress=progress, map_location="cpu")
+        model.load_state_dict(checkpoint["model"])
     model.eval()
     return model
 

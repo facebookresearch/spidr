@@ -1,8 +1,7 @@
 # SpidR: Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision
 
-[📜 [Paper](https://arxiv.org)] [📖 [BibTeX](https://github.com/facebookresearch/spidr/tree/main?tab=readme-ov-file#citation)]
-
-This repository contains the checkpoints and training code for the self-supervised speech models from https://arxiv.org.
+This repository contains the checkpoints and training code for the self-supervised speech models
+in the SpidR paper (coming soon!).
 
 ## Overview
 
