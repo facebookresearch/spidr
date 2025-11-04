@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__
+.vscode
+*.egg-info
+*.code-workspace
+*.pt
+*.pdf
+.python-version
