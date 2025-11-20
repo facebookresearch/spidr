@@ -29,8 +29,10 @@ def read_manifest(path: Path | str) -> pl.DataFrame:
     path = Path(path)
     if path.suffix == ".csv":
         return pl.read_csv(path)
+    if path.suffix == ".jsonl":
+        return pl.read_ndjson(path)
     if path.suffix != ".tsv":
-        raise ValueError("Only .csv and .tsv files are supported")
+        raise ValueError("Only .csv, .jsonl and .tsv files are supported")
     with path.open("r") as file:
         root = Path(file.readline().strip())
     if not root.is_dir():

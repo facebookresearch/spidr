@@ -139,7 +139,11 @@ class Checkpointer:
 
         consume_prefix_in_state_dict_if_present(ckpt["model"], "module.")
         self._state.model.load_state_dict(ckpt["model"])
-        if self._state.model.current_step >= self._state.model.freeze_step:
+        if (
+            hasattr(self._state.model, "current_step")
+            and hasattr(self._state.model, "freeze_step")
+            and self._state.model.current_step >= self._state.model.freeze_step
+        ):
             self._state.model.freeze_extractor()
             if len(self._state.optimizer.param_groups) > 1:
                 remove_param_group(self._state.optimizer, 1)
