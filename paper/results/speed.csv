@@ -1,0 +1,13 @@
+gpu,n,compile,hours
+a100,16,false,29
+a100,8,false,53
+a100,4,false,100
+a100,16,true,23
+a100,8,true,42
+a100,4,true,81
+h100,16,false,19
+h100,8,false,33
+h100,4,false,63
+h100,16,true,15
+h100,8,true,26
+h100,4,true,48

@@ -1,7 +1,8 @@
 # SpidR: Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision
 
-This repository contains the checkpoints and training code for the self-supervised speech models
-in the SpidR paper (coming soon!).
+[📜 [arXiv](https://arxiv.org/abs/2512.20308)] · [📖 [OpenReview](https://openreview.net/forum?id=E7XAFBpfZs)] · [🖋️ [BibTeX](https://github.com/facebookresearch/spidr/tree/main?tab=readme-ov-file#citing-spidr)]
+
+This repository contains the checkpoints and training code for the self-supervised speech models from the SpidR paper.
 
 ## Overview
 
@@ -16,9 +17,8 @@ This learning objective stabilizes the online clustering procedure compared to
 previous approaches, resulting in higher-quality codebooks. SpidR outperforms previous
 state-of-the-art methods on downstream language modeling metrics.
 
-With this codebase you can pretrain SpidR for 400k steps in only a day on 16 A100,
-and in 15 hours on 16 H100. We distribute two checkpoints: SpidR and DinoSR pretrained
-with this codebase on LibriSpeech.
+Using this repository, you can pretrain SpidR for 400k steps in only a day on 16 A100, and in 15 hours on 16 H100.
+We distribute two checkpoints: SpidR and DinoSR pretrained with this codebase on LibriSpeech.
 
 ## Installation
 
@@ -155,6 +155,20 @@ options:
 By default we use torch.compile, the first batches will be quite slow to process.
 To speed up training, you can also remove the computation of the perplexities in the
 source code if you do not care about it.
+
+## Citing SpidR
+
+```bibtex
+@article{
+  poli2025spidr,
+  title={SpidR: Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision},
+  author={Maxime Poli and Mahi Luthra and Youssef Benchekroun and Yosuke Higuchi and Martin Gleize and Jiayi Shen and Robin Algayres and Yu-An Chung and Mido Assran and Juan Pino and Emmanuel Dupoux},
+  journal={Transactions on Machine Learning Research},
+  issn={2835-8856},
+  year={2025},
+  url={https://openreview.net/forum?id=E7XAFBpfZs},
+}
+```
 
 ## License
 

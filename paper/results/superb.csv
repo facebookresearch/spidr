@@ -1,0 +1,7 @@
+model,per_superb,asr_superb
+wav2vec2,5.7,6.43
+hubert,5.41,6.42
+spidr,4.86,7.47
+dinosr_original,3.21,4.71
+dinosr_reproduced,3.54,5.01
+wavlm_base,4.84,6.21
