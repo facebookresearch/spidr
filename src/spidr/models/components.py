@@ -238,7 +238,12 @@ class Transformer(nn.Module):
         return x
 
     def get_intermediate_outputs(
-        self, x: Tensor, attention_mask: Tensor | None = None, num_layers: int | None = None
+        self,
+        x: Tensor,
+        attention_mask: Tensor | None = None,
+        num_layers: int | None = None,
+        *,
+        before_residual: bool = True,
     ) -> list[Tensor]:
         if num_layers is not None and not 0 < num_layers <= len(self.layers):
             exception = f"`num_layers` must be between [1, {len(self.layers)}]"
@@ -253,7 +258,7 @@ class Transformer(nn.Module):
             x_output, layer_result = layer(x, attention_mask)
             if not (self.training and torch.rand(1) <= self.layer_drop):
                 x = x_output.clone()
-            ret.append(layer_result)
+            ret.append(layer_result if before_residual else x_output)
             if num_layers is not None and len(ret) >= num_layers:
                 return ret
         return ret
