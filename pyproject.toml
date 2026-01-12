@@ -1,6 +1,5 @@
 [project]
 name = "spidr"
-version = "0.1.2"
 description = "Learning Fast and Stable Linguistic Units for Spoken Language Models Without Supervision"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +20,7 @@ dependencies = [
   "numpy>=1.26.4",
   "torch>=2.8.0",
 ]
+dynamic = ["version"]
 
 [project.urls]
 github = "https://github.com/facebookresearch/spidr"
@@ -51,8 +51,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["flit_core>=3.12,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["hatch-vcs", "hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.ruff]
 line-length = 119
