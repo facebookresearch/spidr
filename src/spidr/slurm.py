@@ -102,7 +102,7 @@ def launch_with_submitit(
     dump: str | Path,
     slurm: SlurmConfig,
     *,
-    copy_code: bool = True,
+    copy_code: bool = False,
 ) -> bool:
     launch_time = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     folder = Path(dump) / job_name
