@@ -48,6 +48,8 @@ def init_wandb(cfg: Config) -> str | None:
 
 
 def launch_validation(cfg: Config, resume: ResumeConfig) -> None:
+    if cfg.validation == {}:
+        return
     if resume.checkpoint is None:
         logger.info("No checkpoint found, skipping validation at step %s", resume.step)
         return
