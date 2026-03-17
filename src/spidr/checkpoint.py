@@ -11,18 +11,25 @@ import torch
 from torch import GradScaler, nn
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
 from spidr.tools import MetricsQueue
 
 logger = logging.getLogger()
 
 
-def remove_param_group(optim: Optimizer, index: int) -> None:
+def remove_param_group(optim: Optimizer, scheduler: LRScheduler, index: int) -> None:
     for param in optim.param_groups[index]["params"]:
         if param in optim.state:
             del optim.state[param]
     del optim.param_groups[index]
+    if hasattr(scheduler, "base_lrs"):
+        del scheduler.base_lrs[index]
+    if hasattr(scheduler, "_schedulers"):
+        for sub_scheduler in scheduler._schedulers:
+            del sub_scheduler.base_lrs[index]
+            if isinstance(sub_scheduler, LambdaLR):
+                del sub_scheduler.lr_lambdas[index]
 
 
 def find_checkpoints(folder: Path) -> list[Path]:
@@ -134,7 +141,6 @@ class Checkpointer:
         ckpt = torch.load(path, map_location=torch.device("cpu"), weights_only=True)
         self._state.step = ckpt["step"]
         self._state.epoch = ckpt["epoch"]
-        self._state.scheduler.load_state_dict(ckpt["scheduler"])
         self._state.scaler.load_state_dict(ckpt["scaler"])
 
         consume_prefix_in_state_dict_if_present(ckpt["model"], "module.")
@@ -146,10 +152,11 @@ class Checkpointer:
         ):
             self._state.model.freeze_extractor()
             if len(self._state.optimizer.param_groups) > 1:
-                remove_param_group(self._state.optimizer, 1)
+                remove_param_group(self._state.optimizer, self._state.scheduler, 1)
         if len(self._state.optimizer.param_groups) != len(ckpt["optimizer"]["param_groups"]):
             raise ValueError("Inconsistency across current and checkpoint's param_groups")
         self._state.optimizer.load_state_dict(ckpt["optimizer"])
+        self._state.scheduler.load_state_dict(ckpt["scheduler"])
         return True
 
     def load_existing_run(self) -> bool:
