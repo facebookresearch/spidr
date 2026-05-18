@@ -45,9 +45,8 @@ train = [
 
 [dependency-groups]
 dev = [
-  "ipykernel>=6.29.5",
-  "ruff>=0.14.10",
-  "typos>=1.40.1",
+  "ipykernel>=7.2.0",
+  "prek>=0.4.0",
 ]
 
 [build-system]
