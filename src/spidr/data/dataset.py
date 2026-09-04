@@ -12,7 +12,7 @@ from torch import Tensor
 from torch import distributed as dist
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import BatchSampler, DataLoader, Dataset, DistributedSampler
+from torch.utils.data import BatchSampler, DataLoader, Dataset, Sampler
 from torchcodec.decoders import AudioDecoder
 
 from spidr.config import DEFAULT_CONV_LAYER_CONFIG, SAMPLE_RATE, DataConfig, MaskingConfig
@@ -100,15 +100,18 @@ class BucketizeBatchSampler(BatchSampler):
 
     def _update_iter_list(self) -> None:
         if self.shuffle:
-            for k in self.buckets:
-                new_idx = torch.randperm(self.buckets[k].size(0), generator=self.generator)
-                self.buckets[k] = self.buckets[k][new_idx]
+            buckets = {
+                k: bucket[torch.randperm(bucket.size(0), generator=self.generator)]
+                for k, bucket in self.buckets.items()
+            }
+        else:
+            buckets = self.buckets
         self.iter_list = []
         total_len, batch = 0, []
         max_batch_size = self.max_token_count or self.batch_size
-        for k in self.buckets:
-            for i in range(self.buckets[k].size(0)):
-                index = int(self.buckets[k][i])
+        for k in buckets:
+            for i in range(buckets[k].size(0)):
+                index = int(buckets[k][i])
                 sample_length = self.lengths[index] if self.max_token_count else 1
                 if total_len + sample_length <= max_batch_size:
                     batch.append(self.indices[index])
@@ -121,8 +124,8 @@ class BucketizeBatchSampler(BatchSampler):
             self.iter_list.append(batch)
 
     def set_epoch(self, epoch: int) -> None:
-        self.seed += epoch
-        self.generator.manual_seed(self.seed)
+        if self.shuffle:
+            self.generator.manual_seed(self.seed + epoch)
         self._update_iter_list()
 
     def __iter__(self) -> Iterator[list[int]]:
@@ -132,10 +135,11 @@ class BucketizeBatchSampler(BatchSampler):
         return len(self.iter_list)
 
 
-class DistributedBatchSampler(DistributedSampler):
-    """Distributed sampler for BucketizeBatchSampler."""
+class DistributedBatchSampler(Sampler[list[int]]):
+    """Distributed batch sampler wrapping a BucketizeBatchSampler."""
 
     def __init__(self, batch_sampler: BucketizeBatchSampler, *, seed: int, shuffle: bool, drop_last: bool) -> None:
+        super().__init__()
         self.batch_sampler = batch_sampler
         self.num_replicas = dist.get_world_size() if dist.is_initialized() else 1
         self.rank = dist.get_rank() if dist.is_initialized() else 0
@@ -143,7 +147,6 @@ class DistributedBatchSampler(DistributedSampler):
         self.epoch = 0
         self.seed = seed
         self.drop_last = drop_last
-        self.shuffle = shuffle
         indices = self.batch_sampler.iter_list
         if self.drop_last and len(indices) % self.num_replicas != 0:
             # Split to nearest available length that is evenly divisible.
@@ -154,7 +157,7 @@ class DistributedBatchSampler(DistributedSampler):
 
     def set_epoch(self, epoch: int) -> None:
         self.batch_sampler.set_epoch(epoch)
-        return super().set_epoch(epoch)
+        self.epoch = epoch
 
     def __iter__(self) -> Iterator[list[int]]:
         if self.shuffle:
@@ -162,11 +165,11 @@ class DistributedBatchSampler(DistributedSampler):
             perm = torch.randperm(len(self.batch_sampler.iter_list), generator=generator).tolist()
             indices = [self.batch_sampler.iter_list[i] for i in perm]
         else:
-            indices = self.batch_sampler.iter_list
+            indices = list(self.batch_sampler.iter_list)
         if self.drop_last:
             self.total_size = len(indices) - len(indices) % self.num_replicas
         else:
-            padding_size = self.num_replicas - len(indices) % self.num_replicas
+            padding_size = -len(indices) % self.num_replicas
             indices += indices[:padding_size]
             self.total_size = len(indices)
         self.num_samples = self.total_size // self.num_replicas
@@ -198,7 +201,10 @@ class SpeechDataset(Dataset, abc.ABC):
     def __getitem__(self, index: int) -> Tensor:
         waveform, sr = self._load_audio(index)
         if sr != SAMPLE_RATE or waveform.shape[0] != 1:
-            raise ValueError(index)
+            raise ValueError(
+                f"Sample {index}: expected mono audio at {SAMPLE_RATE} Hz, "
+                f"got {waveform.shape[0]} channel(s) at {sr} Hz"
+            )
         if self.normalize:
             waveform = F.layer_norm(waveform, waveform.shape)
         return waveform.squeeze()
