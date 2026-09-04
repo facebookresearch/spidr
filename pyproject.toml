@@ -48,6 +48,9 @@ train = [
 dev = [
   "prek>=0.5.2",
 ]
+test = [
+  "pytest>=9.1.1",
+]
 
 [build-system]
 requires = ["hatch-vcs", "hatchling"]
@@ -58,6 +61,9 @@ packages = ["src/spidr"]
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.pytest]
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 119
