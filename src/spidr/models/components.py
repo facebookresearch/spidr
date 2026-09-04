@@ -231,7 +231,7 @@ class Transformer(nn.Module):
             x = self.layer_norm(x)
         x = self.dropout(x)
         for layer in self.layers:
-            if not (self.training and torch.rand(1) <= self.layer_drop):
+            if not (self.layer_drop > 0 and self.training and bool(torch.rand(1) <= self.layer_drop)):
                 x, _ = layer(x, attention_mask)
         if not self.layer_norm_first:
             x = self.layer_norm(x)
@@ -256,8 +256,8 @@ class Transformer(nn.Module):
         x = self.dropout(x)
         for layer in self.layers:
             x_output, layer_result = layer(x, attention_mask)
-            if not (self.training and torch.rand(1) <= self.layer_drop):
-                x = x_output.clone()
+            if not (self.layer_drop > 0 and self.training and bool(torch.rand(1) <= self.layer_drop)):
+                x = x_output
             ret.append(layer_result if before_residual else x_output)
             if num_layers is not None and len(ret) >= num_layers:
                 return ret

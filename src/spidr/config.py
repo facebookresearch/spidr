@@ -63,7 +63,7 @@ class DataConfig:
     max_batch_length: int = 3_800_000
     drop_last: bool = False
     num_workers: int = 10
-    pin_memory: bool = False
+    pin_memory: bool = True
     prefetch_factor: int = 2
     persistent_workers: bool = True
     random_seed: int = 0

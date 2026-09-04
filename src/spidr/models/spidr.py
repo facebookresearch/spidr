@@ -29,6 +29,9 @@ class SpidR(DinoSR):
             timescale=cfg.ema_timescale,
             threshold=cfg.ema_threshold,
         )
+        self.student.get_submodule(  # Last normalization layer of the student, which is never used in the loss.
+            "layer_norm" if cfg.encoder_layer_norm_first else f"layers.{cfg.encoder_num_layers - 1}.final_layer_norm"
+        ).requires_grad_(requires_grad=False)
 
     def get_codebooks(
         self,

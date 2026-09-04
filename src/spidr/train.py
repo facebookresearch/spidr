@@ -94,8 +94,15 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
         if cfg.run.compile:
             model.compile(dynamic=True)
             model._inner_ema = torch.compile(model._inner_ema)
-        ddp_model = DistributedDataParallel(model, device_ids=[device.index], find_unused_parameters=True)
 
+        def wrap_ddp() -> DistributedDataParallel:
+            return DistributedDataParallel(
+                model,
+                device_ids=[device.index],
+                find_unused_parameters=cfg.model.encoder_layer_drop > 0,
+            )
+
+        ddp_model = wrap_ddp()
         logger.info("Starting training loop")
         meters = AverageMeters(["loss", "grad_norm", "batch_size", "target_ppl", "pred_ppl"], device=device)
         profiler = stack.enter_context(profiler_context(cfg.run.dir / "trace.html" if is_main else None))
@@ -104,17 +111,17 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
             epoch += 1
             loader.batch_sampler.set_epoch(epoch)
             logger.info("Starting epoch %s", epoch)
-            for waveforms, attn_mask, mask in loader:
+            for waveforms_cpu, attn_mask_cpu, mask_cpu in loader:
                 if step >= cfg.optimizer.max_steps:
                     break
+                waveforms = waveforms_cpu.to(device, non_blocking=True)
+                attn_mask = attn_mask_cpu.to(device, non_blocking=True) if attn_mask_cpu is not None else None
+                mask = mask_cpu.to(device, non_blocking=True)
+                num_frames = mask.sum()
+                num_frames_work = dist.all_reduce(num_frames, async_op=True)
                 with torch.autocast("cuda", dtype, cfg.optimizer.mixed_precision):
-                    loss, outputs = ddp_model(
-                        waveforms.to(device),
-                        mask=mask.to(device),
-                        attention_mask=attn_mask.to(device) if attn_mask is not None else None,
-                    )
-                num_frames = torch.tensor(loss.size(0), dtype=torch.long, device=device)
-                dist.all_reduce(num_frames)
+                    loss, outputs = ddp_model(waveforms, mask=mask, attention_mask=attn_mask)
+                num_frames_work.wait()
                 loss = loss.sum() * world_size / num_frames
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -128,7 +135,7 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
                 ema_decay = model.update_ema(step)
                 if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
                     remove_param_group(optimizer, scheduler, 1)
-
+                    ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
                 meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm)
                 meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
                 pbar.update()

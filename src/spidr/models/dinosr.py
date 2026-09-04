@@ -60,6 +60,7 @@ class DinoSR(nn.Module):
         self.mask_embedding = nn.Parameter(torch.FloatTensor(cfg.encoder_embed_dim))
         nn.init.uniform_(self.mask_embedding)
         self.current_step = nn.Buffer(torch.zeros(1, dtype=torch.int64))
+        self._ema_decay = nn.Buffer(torch.zeros(()), persistent=False)
 
     def train(self, mode: bool = True) -> "DinoSR":  # noqa: FBT001, FBT002
         super().train(mode)
@@ -93,7 +94,8 @@ class DinoSR(nn.Module):
         if not self._extractor_frozen and step >= self.freeze_step:
             self.freeze_extractor()
         if 0.0 < decay < 1.0:
-            self._inner_ema(torch.tensor(decay, device=self.current_step.device))
+            self._ema_decay.fill_(decay)
+            self._inner_ema(self._ema_decay)
         return decay
 
     def get_intermediate_outputs(self, waveforms: Tensor, *, attention_mask: Tensor | None = None) -> list[Tensor]:
