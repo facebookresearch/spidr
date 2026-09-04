@@ -13,12 +13,13 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
   "numpy>=1.26.4",
-  "torch>=2.8.0",
+  "torch>=2.13.0",
 ]
 dynamic = ["version"]
 
@@ -27,17 +28,17 @@ github = "https://github.com/facebookresearch/spidr"
 
 [project.optional-dependencies]
 plot = [
-  "fastabx>=0.5.2",
+  "fastabx>=0.8.0",
   "matplotlib>=3.10.3",
-  "polars>=1.31.0",
+  "polars>=1.44.1",
   "scikit-learn>=1.7.0",
   "scipy>=1.16.0",
-  "torchcodec>=0.6.0",
+  "torchcodec>=0.16.0",
 ]
 train = [
-  "polars>=1.31.0",
+  "polars>=1.44.1",
   "submitit>=1.5.2",
-  "torchcodec>=0.7.0",
+  "torchcodec>=0.16.0",
   "tqdm>=4.67.1",
   "viztracer>=1.0.3",
   "wandb>=0.19.10",
@@ -45,8 +46,7 @@ train = [
 
 [dependency-groups]
 dev = [
-  "ipykernel>=7.2.0",
-  "prek>=0.4.0",
+  "prek>=0.5.2",
 ]
 
 [build-system]
@@ -63,32 +63,14 @@ source = "vcs"
 line-length = 119
 
 [tool.ruff.lint]
-ignore = [
-  "COM812",  # Incompatible format recommendation.
-  "D101",  # Class docstring.
-  "D102",  # Public method docstring.
-  "D103",  # Public function docstring.
-  "D105",  # Magic method docstring.
-  "D107",  # __init__ docstring.
-  "D203",  # Blank line before class.
-  "D213",  # Multi-line docstring second line.
-  "DOC",  # Disable pydoclint.
-  "EM101",  # Exceptions can have literal string.
-  "EM102",  # f-string in exceptions are ok.
-  "FURB118",  # Do not use operator module.
-  "ISC001",  # Incompatible format recommendation.
-  "NPY002",  # We use np.random.seed to set the seed just in case.
-  "PD011",  # Leads to false positives.
-  "PTH206",  # Needed in polars expressions.
-  "PLR6104",  # Leads to bugs in model code.
-  "S101",  # Asserts are ok.
-  "S311",  # Standard random is ok.
-  "S404",  # Allow subprocess.
-  "S602",  # Subprocess is ok.
-  "S603",  # Subprocess is ok.
-  "TRY003",  # Exceptions can have long error messages.
+select = [
+  "correctness",
+  "suspicious",
+  "complexity",
+  "performance",
+  "style",
+  "missing-copyright-notice",
 ]
-select = ["ALL"]
 preview = true
 
 [tool.ruff.lint.pep8-naming]

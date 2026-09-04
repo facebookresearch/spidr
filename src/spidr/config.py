@@ -188,12 +188,12 @@ def read_config(path: str | Path) -> Config:
     if path.suffix not in {".json", ".toml"}:
         raise ValueError(f"Unsupported config file format: {path.suffix}. Use .json or .toml.")
     data = (tomllib.loads if path.suffix == ".toml" else json.loads)(Path(path).read_text(encoding="utf-8"))
-    run = RunConfig(**data["run"])  # ty: ignore[missing-argument]
+    run = RunConfig(**data["run"])
     return Config(
         run=run,
-        data=DataConfig(**data["data"]),  # ty: ignore[missing-argument]
+        data=DataConfig(**data["data"]),
         model=(DinoSRConfig if run.model_type == "dinosr" else SpidRConfig)(**data.get("model", {})),
         optimizer=OptimizerConfig(**data.get("optimizer", {})),
         masking=MaskingConfig(**data.get("masking", {})),
-        validation={k: DataConfig(**v) for k, v in data["validation"].items()} if "validation" in data else {},  # ty: ignore[missing-argument]
+        validation={k: DataConfig(**v) for k, v in data["validation"].items()} if "validation" in data else {},
     )

@@ -123,8 +123,8 @@ class MetricsQueue:
 
 def push_later_to_wandb(path: Path, runid: str | None, entity: str) -> None:
     """Push unlogged metrics from a finished run to wandb."""
-    import polars as pl  # noqa: PLC0415
-    import wandb  # noqa: PLC0415
+    import polars as pl
+    import wandb
 
     metrics = pl.read_ndjson(path)
     api = wandb.Api()
@@ -140,7 +140,8 @@ def push_later_to_wandb(path: Path, runid: str | None, entity: str) -> None:
             raise ValueError("No candidate run found: wrong name or still running.")
         runid = candidates[0].id
     history = api.run(f"{entity}/{project}/{runid}").history()
-    max_steps = {group: history[f"{group}/step"].max().astype(int) for group in metrics["group"].unique()}
+    # `history()` returns a DataFrame when pandas=True (the default), but is typed as a union with list[dict].
+    max_steps = {group: history[f"{group}/step"].max().astype(int) for group in metrics["group"].unique()}  # ty: ignore[invalid-argument-type]
     metrics = metrics.filter(pl.col("step") > pl.col("group").replace_strict(max_steps))
     if len(metrics) == 0:
         return

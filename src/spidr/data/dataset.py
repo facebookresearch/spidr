@@ -109,6 +109,7 @@ class BucketizeBatchSampler(BatchSampler):
         self.iter_list = []
         total_len, batch = 0, []
         max_batch_size = self.max_token_count or self.batch_size
+        assert max_batch_size is not None  # guaranteed by verify_lengths in __init__
         for k in buckets:
             for i in range(buckets[k].size(0)):
                 index = int(buckets[k][i])
@@ -270,7 +271,7 @@ class SpeechCollatorWithMasking:
         num_samples = max(len(wav) for wav in batch) if self.enable_padding else min(len(wav) for wav in batch)
         wavs_with_len = [crop_audio(wav, num_samples, self.max_sample_size, rand_crop=self.rand_crop) for wav in batch]
         wav_list, wav_lengths = zip(*wavs_with_len, strict=True)
-        wavs = pad_sequence(wav_list, batch_first=True)
+        wavs = pad_sequence(list(wav_list), batch_first=True)
         lengths = conv_length(self.conv_layer_config, torch.tensor(wav_lengths))
         batch_size, max_len = wavs.size(0), int(lengths.max())
         padding_mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]

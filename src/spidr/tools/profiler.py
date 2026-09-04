@@ -37,7 +37,7 @@ def scheduler_fn(step: int, skip_first: int, warmup: int, active: int) -> Profil
 class NullProfiler:
     """A no-op profiler that does nothing."""
 
-    def step(self) -> None:  # noqa: PLR6301
+    def step(self) -> None:
         return
 
 

@@ -90,7 +90,7 @@ def setup_environment(**kwargs: str) -> None:
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
-    np.random.seed(seed)
+    np.random.seed(seed)  # ruff: ignore[numpy-legacy-random]
     torch.manual_seed(seed)
 
 
@@ -102,7 +102,7 @@ def setup_pytorch(*, use_deterministic: bool) -> None:
     if use_deterministic:
         torch.use_deterministic_algorithms(mode=True)
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-        torch._inductor.config.fallback_random = True
+        torch._inductor.config.fallback_random = True  # ty: ignore[invalid-assignment]
 
 
 def setup_training(seed: int, *, use_deterministic: bool = False) -> None:

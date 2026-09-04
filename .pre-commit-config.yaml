@@ -1,26 +1,31 @@
 exclude: uv.lock
 repos:
 - repo: https://github.com/zizmorcore/zizmor-pre-commit
-  rev: v1.25.2
+  rev: v1.30.0
   hooks:
     - id: zizmor
 - repo: https://github.com/crate-ci/typos
-  rev: v1.46.2
+  rev: v1.50.1
   hooks:
     - id: typos
 - repo: https://github.com/tombi-toml/tombi-pre-commit
-  rev: v0.11.5
+  rev: v1.5.1
   hooks:
     - id: tombi-format
     - id: tombi-lint
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.15.13
+  rev: v0.16.6
   hooks:
     - id: ruff-check
       args: [ --fix ]
     - id: ruff-format
 - repo: https://github.com/astral-sh/uv-pre-commit
-  rev: 0.12.8
+  rev: 0.12.9
   hooks:
     - id: uv-lock
     - id: uv-audit
+- repo: https://github.com/astral-sh/ty-pre-commit
+  rev: v0.0.56
+  hooks:
+    - id: ty
+      args: [ --all-extras ]

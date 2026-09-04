@@ -62,7 +62,7 @@ class DinoSR(nn.Module):
         self.current_step = nn.Buffer(torch.zeros(1, dtype=torch.int64))
         self._ema_decay = nn.Buffer(torch.zeros(()), persistent=False)
 
-    def train(self, mode: bool = True) -> "DinoSR":  # noqa: FBT001, FBT002
+    def train(self, mode: bool = True) -> "DinoSR":
         super().train(mode)
         self.teacher.eval()
         return self

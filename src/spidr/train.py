@@ -65,7 +65,7 @@ def launch_validation(cfg: Config, resume: ResumeConfig) -> None:
     )
 
 
-def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
+def train(cfg: Config) -> None:
     with ExitStack() as stack:
         logger.info("Starting job")
         setup_training(cfg.run.random_seed, use_deterministic=cfg.run.use_deterministic)
@@ -92,7 +92,7 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
         if cfg.run.compile:
             model.compile(dynamic=True)
-            model._inner_ema = torch.compile(model._inner_ema)
+            model._inner_ema = torch.compile(model._inner_ema)  # ty: ignore[invalid-assignment]
 
         def wrap_ddp() -> DistributedDataParallel:
             return DistributedDataParallel(
@@ -108,7 +108,7 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
         pbar = stack.enter_context(tqdm(total=cfg.optimizer.max_steps, initial=step, disable=not is_main))
         while step < cfg.optimizer.max_steps:
             epoch += 1
-            loader.batch_sampler.set_epoch(epoch)
+            loader.batch_sampler.set_epoch(epoch)  # ty: ignore[unresolved-attribute]
             logger.info("Starting epoch %s", epoch)
             for waveforms_cpu, attn_mask_cpu, mask_cpu in loader:
                 if step >= cfg.optimizer.max_steps:

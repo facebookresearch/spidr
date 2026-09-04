@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Meta Platforms, Inc. and affiliates. # noqa: INP001
+# Copyright (c) 2025 Meta Platforms, Inc. and affiliates.
 """Extract SpidR features from audio files."""
 
 import argparse

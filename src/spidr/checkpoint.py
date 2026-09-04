@@ -148,9 +148,9 @@ class Checkpointer:
         if (
             hasattr(self._state.model, "current_step")
             and hasattr(self._state.model, "freeze_step")
-            and self._state.model.current_step >= self._state.model.freeze_step
+            and self._state.model.current_step >= self._state.model.freeze_step  # ty: ignore[unsupported-operator]
         ):
-            self._state.model.freeze_extractor()
+            self._state.model.freeze_extractor()  # ty: ignore[call-non-callable]
             if len(self._state.optimizer.param_groups) > 1:
                 remove_param_group(self._state.optimizer, self._state.scheduler, 1)
         if len(self._state.optimizer.param_groups) != len(ckpt["optimizer"]["param_groups"]):

@@ -22,7 +22,7 @@ def git_available() -> bool:
 
 
 def git_info() -> GitInfo:
-    root = Path(importlib.resources.files(__package__)).parent.parent
+    root = Path(str(importlib.resources.files(__package__))).parent.parent
     git_cmd = ["git", "-C", root, "rev-parse", "HEAD", "--abbrev-ref", "HEAD"]
     info = subprocess.run(git_cmd, capture_output=True, check=True, text=True)
     commit, branch = info.stdout.strip().split("\n")

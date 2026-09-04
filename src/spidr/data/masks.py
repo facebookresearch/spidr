@@ -86,7 +86,7 @@ def compute_mask_indices(
     mask_idcs = []
     for i in range(batch_size):
         if padding_mask is not None:
-            sz = frame - padding_mask[i].long().sum().item()
+            sz = frame - int(padding_mask[i].long().sum().item())
             # add a random number for probabilistic rounding
             num_mask = int(mask_prob * sz / float(mask_length) + torch.rand(1, generator=generator))
             num_mask = max(min_masks, num_mask)

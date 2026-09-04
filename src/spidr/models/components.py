@@ -16,8 +16,8 @@ from spidr.config import DinoSRConfig
 class LayerNorm(nn.LayerNorm):
     """Layer norm with transpose."""
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = x.transpose(-2, -1)
+    def forward(self, input: Tensor) -> Tensor:
+        x = input.transpose(-2, -1)
         x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         return x.transpose(-2, -1)
 

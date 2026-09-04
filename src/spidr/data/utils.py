@@ -13,7 +13,11 @@ from torchcodec.decoders import AudioDecoder
 
 def num_samples(source: str | Path | bytes, *, verify: bool = False) -> int:
     metadata = AudioDecoder(source).metadata
-    samples = metadata.duration_seconds_from_header * metadata.sample_rate
+    duration, sample_rate = metadata.duration_seconds_from_header, metadata.sample_rate
+    if duration is None or sample_rate is None:
+        exception = "Could not determine duration or sample rate from header"
+        raise ValueError(exception + (f" for {source}" if isinstance(source, str | Path) else ""))
+    samples = duration * sample_rate
     if verify and not samples.is_integer():
         raise ValueError(
             f"Number of samples {samples} is not an integer"

@@ -7,10 +7,10 @@ import json
 import logging
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
 import submitit
 from submitit.core.utils import FailedJobError
@@ -22,14 +22,14 @@ logger = logging.getLogger()
 
 
 def current_codebase_path() -> Path:
-    import spidr  # noqa: PLC0415
+    import spidr
 
     return Path(spidr.__file__).parent.parent
 
 
 def copy_code_to_submitit_folder(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(importlib.resources.files(__package__)).parent.parent
+    root = Path(str(importlib.resources.files(__package__))).parent.parent
     logger.info("Copying: %s to: %s", root, output_dir)
     rsync_cmd = [
         "rsync",
@@ -58,7 +58,7 @@ T = TypeVar("T")
 P = ParamSpec("P")
 
 
-def make_checkpointable(fn: Callable[P, T]) -> Callable[P, T]:  # noqa: UP047
+def make_checkpointable[**P, T](fn: Callable[P, T]) -> Callable[P, T]:
     # Disable linting because "Only parameter specification variables defined in global scope can be pickled."
     def checkpoint(*args: P.args, **kwargs: P.kwargs) -> submitit.helpers.DelayedSubmission:
         return submitit.helpers.DelayedSubmission(fn, args, kwargs)
@@ -101,7 +101,7 @@ def slurm_config_parse_args(args: argparse.Namespace) -> SlurmConfig:
 @submitit.helpers.clean_env()
 def launch_with_submitit(
     job_name: str,
-    jobs: list[tuple[Callable, tuple]],
+    jobs: Sequence[tuple[Callable[..., Any], tuple[Any, ...]]],
     dump: str | Path,
     slurm: SlurmConfig,
     *,

@@ -3,9 +3,9 @@
 
 from pathlib import Path
 
-from torch.hub import _add_to_sys_path  # noqa: PLC2701
+from torch.hub import _add_to_sys_path
 
 dependencies = ["torch", "numpy"]
 
 with _add_to_sys_path(str(Path(__file__).parent / "src")):
-    from spidr.models import dinosr_base_original, dinosr_base_reproduced, spidr_base  # noqa: F401
+    from spidr.models import dinosr_base_original, dinosr_base_reproduced, spidr_base  # ruff: ignore[unused-import]

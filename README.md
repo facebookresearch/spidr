@@ -23,7 +23,7 @@ We distribute two checkpoints: SpidR and DinoSR pretrained with this codebase on
 ## Installation
 
 This is available as a package on PyPI.
-To use the pretrained models, the only dependencies are `torch>=2.8.0` and `numpy>=1.26.4`, with Python 3.12 at least.
+To use the pretrained models, the only dependencies are `torch>=2.13.0` and `numpy>=1.26.4`, with Python 3.12 at least.
 If you want to train your own model, install the optional `train` dependencies[^1].
 
 [^1]: polars, submitit, torchcodec, tqdm, viztracer, and wandb
