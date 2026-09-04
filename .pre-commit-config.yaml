@@ -20,7 +20,7 @@ repos:
       args: [ --fix ]
     - id: ruff-format
 - repo: https://github.com/astral-sh/uv-pre-commit
-  rev: 0.11.14
+  rev: 0.12.8
   hooks:
     - id: uv-lock
     - id: uv-audit

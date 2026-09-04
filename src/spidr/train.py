@@ -107,9 +107,6 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
             for waveforms, attn_mask, mask in loader:
                 if step >= cfg.optimizer.max_steps:
                     break
-                if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
-                    remove_param_group(optimizer, 1)
-
                 with torch.autocast("cuda", dtype, cfg.optimizer.mixed_precision):
                     loss, outputs = ddp_model(
                         waveforms.to(device),
@@ -129,6 +126,8 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
                 scheduler.step()
                 step += 1
                 ema_decay = model.update_ema(step)
+                if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
+                    remove_param_group(optimizer, scheduler, 1)
 
                 meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm)
                 meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
