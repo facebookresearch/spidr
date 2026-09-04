@@ -2,6 +2,8 @@
 """Model components for DinoSR and SpidR."""
 
 import math
+from collections.abc import Iterator
+from typing import cast
 
 import torch
 from torch import Tensor, nn
@@ -278,29 +280,39 @@ class Codebook(nn.Module):
     def forward(self, target: Tensor) -> Tensor:
         codebook = self.codebook / self.counts.unsqueeze(1)
         labels = torch.cdist(target, codebook, p=2).argmin(1)
-        onehot_target = F.one_hot(labels, self.codebook_size).float()
-        if self.training:
-            self.step(onehot_target, target)
-        return onehot_target
+        return F.one_hot(labels, self.codebook_size).float()
 
     @torch.no_grad()
-    def step(self, onehot_target: Tensor, target: Tensor) -> None:
+    def update(self, count: Tensor, memory: Tensor) -> None:
         if self.codebook_decay >= 1.0:
             return
-        count = onehot_target.sum(0)
-        memory = torch.matmul(onehot_target.t(), target)
+        alpha = torch.where(count != 0, self.codebook_decay, 1.0)  # Entries with no assignment are left as-is
+        self.counts = alpha * self.counts + (1 - alpha) * count
+        self.codebook = alpha.unsqueeze(1) * self.codebook + (1 - alpha).unsqueeze(1) * memory
+
+
+class Codebooks(nn.ModuleList):
+    def __iter__(self) -> Iterator[Codebook]:
+        return cast("Iterator[Codebook]", super().__iter__())
+
+    @torch.no_grad()
+    def quantize(self, targets: list[Tensor]) -> list[Tensor]:
+        onehot_targets = [codebook(target) for codebook, target in zip(self, targets, strict=True)]
+        if not (self.training and any(codebook.codebook_decay < 1.0 for codebook in self)):
+            return onehot_targets
+        counts = torch.stack([onehot.sum(0) for onehot in onehot_targets])  # Assignments per entry
+        memories = torch.stack([onehot.t() @ target for onehot, target in zip(onehot_targets, targets, strict=True)])
         if dist.is_initialized():
-            dist.all_reduce(memory)  # Sum of embeddings
-            dist.all_reduce(count)  # Total counts
-        alpha = torch.ones_like(count).unsqueeze(1)
-        alpha[count != 0] = self.codebook_decay
-        self.counts = alpha.squeeze(1) * self.counts + (1 - alpha).squeeze(1) * count
-        self.codebook = alpha * self.codebook + (1 - alpha) * memory
+            dist.all_reduce(memories)
+            dist.all_reduce(counts)
+        for codebook, count, memory in zip(self, counts, memories, strict=True):
+            codebook.update(count, memory)
+        return onehot_targets
 
 
 def get_components(
     cfg: DinoSRConfig,
-) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, nn.ModuleList]:
+) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, Codebooks]:
     if cfg.extractor_mode not in {"group_norm", "layer_norm"}:
         raise ValueError(cfg.extractor_mode)
     blocks = nn.ModuleList()
@@ -349,7 +361,7 @@ def get_components(
         nn.Sequential(nn.Linear(cfg.encoder_embed_dim, cfg.codebook_size), nn.LogSoftmax(dim=-1))
         for _ in range(cfg.num_codebooks)
     )
-    codebooks = nn.ModuleList(
+    codebooks = Codebooks(
         Codebook(cfg.encoder_embed_dim, cfg.codebook_size, cfg.codebook_decay) for _ in range(cfg.num_codebooks)
     )
     return feature_extractor, feature_projection, student, heads, codebooks

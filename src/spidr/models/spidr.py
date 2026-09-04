@@ -73,8 +73,7 @@ class SpidR(DinoSR):
 
         losses = torch.zeros(log_preds[0].shape[0], device=x.device)
         target_ppl, pred_ppl = torch.zeros((), device=x.device), torch.zeros((), device=x.device)
-        for i, (log_pred, target) in enumerate(zip(log_preds, targets, strict=True)):
-            onehot_target = self.codebooks[i](target)
+        for log_pred, onehot_target in zip(log_preds, self.codebooks.quantize(targets), strict=True):
             target_ppl += perplexity(onehot_target)
             pred_ppl += perplexity(log_pred.exp())
             losses += torch.sum(-onehot_target * log_pred, dim=-1)

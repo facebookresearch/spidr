@@ -142,9 +142,8 @@ class DinoSR(nn.Module):
 
         losses = torch.zeros(x.shape[0], device=x.device)
         target_ppl, pred_ppl = torch.zeros(1, device=x.device), torch.zeros(1, device=x.device)
-        for i, target in enumerate(targets):
+        for i, onehot_target in enumerate(self.codebooks.quantize(targets)):
             log_pred = self.heads[i](x)
-            onehot_target = self.codebooks[i](target)
             target_ppl += perplexity(onehot_target)
             pred_ppl += perplexity(log_pred.exp())
             losses += torch.sum(-onehot_target * log_pred, dim=-1)
