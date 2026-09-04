@@ -31,23 +31,26 @@ def copy_code_to_submitit_folder(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     root = Path(importlib.resources.files(__package__)).parent.parent
     logger.info("Copying: %s to: %s", root, output_dir)
-    rsync_cmd = (
-        f"rsync -ar --copy-links "
-        f"--exclude='.git/' "
-        f"--exclude './data/' "
-        f"--exclude './paper/' "
-        f"--exclude __pycache__ "
-        f"--exclude '*.pyc' "
-        f"--exclude '*.ipynb' "
-        f"--exclude '*.err' "
-        f"--exclude '*.out' "
-        f"--exclude '*.log' "
-        f"--exclude '*.pt' "
-        f"--exclude '.ruff_cache/' "
-        f"--exclude '.mypy_cache/' "
-        f"{root}/ {output_dir}"
-    )
-    subprocess.call([rsync_cmd], shell=True)
+    rsync_cmd = [
+        "rsync",
+        "-ar",
+        "--copy-links",
+        "--exclude=.git/",
+        "--exclude=./data/",
+        "--exclude=./paper/",
+        "--exclude=__pycache__",
+        "--exclude=*.pyc",
+        "--exclude=*.ipynb",
+        "--exclude=*.err",
+        "--exclude=*.out",
+        "--exclude=*.log",
+        "--exclude=*.pt",
+        "--exclude=.ruff_cache/",
+        "--exclude=.mypy_cache/",
+        f"{root}/",
+        str(output_dir),
+    ]
+    subprocess.call(rsync_cmd)
     logger.info("Copy done.")
 
 

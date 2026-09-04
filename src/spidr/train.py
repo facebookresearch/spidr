@@ -28,11 +28,11 @@ from spidr.validate import validate_existing_checkpoint
 logger = logging.getLogger()
 
 
-def init_wandb(cfg: Config) -> str | None:
+def init_wandb(cfg: Config) -> None:
     logger.debug("Initializing wandb")
     cfg.run.dir.mkdir(parents=True, exist_ok=True)
     (cfg.run.dir / "config.json").write_text(json.dumps(dataclasses.asdict(cfg), indent=4))
-    run = wandb.init(
+    wandb.init(
         project=cfg.run.wandb_project,
         name=cfg.run.wandb_name,
         mode=cfg.run.wandb_mode,
@@ -44,7 +44,6 @@ def init_wandb(cfg: Config) -> str | None:
     for prefix in cfg.validation:
         wandb.define_metric(f"{prefix}/step")
         wandb.define_metric(f"{prefix}/*", step_metric=f"{prefix}/step")
-    return run.id
 
 
 def launch_validation(cfg: Config, resume: ResumeConfig) -> None:

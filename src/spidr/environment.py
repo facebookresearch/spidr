@@ -77,6 +77,7 @@ def setup_environment(**kwargs: str) -> None:
     else:
         cache = Path(torch._appdirs.user_cache_dir(appname="spidr"))
     cache.mkdir(exist_ok=True, parents=True)
+    (cache / "tmp").mkdir(exist_ok=True)
     kwargs["TMPDIR"] = str(cache / "tmp")
     kwargs["TORCHINDUCTOR_CACHE_DIR"] = str(cache / "torchinductor")
     kwargs["TRITON_HOME"] = str(cache)
@@ -98,7 +99,6 @@ def setup_pytorch(*, use_deterministic: bool) -> None:
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
     torch.backends.cudnn.benchmark = False  # Needed because of dynamic input size
-    torch.autograd.set_detect_anomaly(mode=False, check_nan=True)
     if use_deterministic:
         torch.use_deterministic_algorithms(mode=True)
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

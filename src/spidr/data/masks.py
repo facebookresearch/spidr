@@ -57,7 +57,7 @@ def mask_id_no_overlap(
         if l_sum == 0:
             break
         probs = lens / l_sum
-        c = torch.distributions.Categorical(probs).sample()  # WARNING: does not accept `generator`
+        c = int(torch.multinomial(probs, 1, generator=generator))
         s, e = parts.pop(c)
         parts.extend(arrange(mask_idc_list, s, e, length, min_length))
     return torch.tensor(mask_idc_list)
