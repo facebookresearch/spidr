@@ -111,7 +111,7 @@ def train(cfg: Config) -> None:  # noqa: PLR0914, PLR0915, C901
                     loss, outputs = ddp_model(
                         waveforms.to(device),
                         mask=mask.to(device),
-                        attention_mask=attn_mask.to(device),
+                        attention_mask=attn_mask.to(device) if attn_mask is not None else None,
                     )
                 num_frames = torch.tensor(loss.size(0), dtype=torch.long, device=device)
                 dist.all_reduce(num_frames)

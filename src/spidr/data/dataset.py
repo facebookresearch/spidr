@@ -260,7 +260,7 @@ class SpeechCollatorWithMasking:
         self.enable_padding = enable_padding
         self.rand_crop = rand_crop
 
-    def __call__(self, batch: list[Tensor]) -> tuple[Tensor, Tensor, Tensor | None]:
+    def __call__(self, batch: list[Tensor]) -> tuple[Tensor, Tensor | None, Tensor | None]:
         num_samples = max(len(wav) for wav in batch) if self.enable_padding else min(len(wav) for wav in batch)
         wavs_with_len = [crop_audio(wav, num_samples, self.max_sample_size, rand_crop=self.rand_crop) for wav in batch]
         wav_list, wav_lengths = zip(*wavs_with_len, strict=True)
@@ -268,7 +268,7 @@ class SpeechCollatorWithMasking:
         lengths = conv_length(self.conv_layer_config, torch.tensor(wav_lengths))
         batch_size, max_len = wavs.size(0), int(lengths.max())
         padding_mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]
-        attn_mask = ~padding_mask[:, None, None, :].expand(batch_size, 1, max_len, max_len)
+        attn_mask = ~padding_mask[:, None, None, :] if bool(padding_mask.any()) else None
         mask_indices = self.mask_generator(padding_mask)[0]
         return wavs, attn_mask, mask_indices
 

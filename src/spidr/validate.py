@@ -23,7 +23,11 @@ def validate(model: DinoSR, loader: DataLoader, device: torch.device) -> dict[st
     total_target_ppl = torch.zeros(1, device=device)
     total_pred_ppl = torch.zeros(1, device=device)
     for waveforms, attn_mask, mask in loader:
-        loss, outputs = model(waveforms.to(device), mask=mask.to(device), attention_mask=attn_mask.to(device))
+        loss, outputs = model(
+            waveforms.to(device),
+            mask=mask.to(device),
+            attention_mask=attn_mask.to(device) if attn_mask is not None else None,
+        )
         total_loss += loss.mean()
         total_target_ppl += outputs["target_ppl"]
         total_pred_ppl += outputs["pred_ppl"]
