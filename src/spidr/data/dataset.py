@@ -13,7 +13,7 @@ from torch import distributed as dist
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import BatchSampler, DataLoader, Dataset, Sampler
-from torchcodec.decoders import AudioDecoder
+from torchcodec.decoders import AudioDecoder, WavDecoder
 
 from spidr.config import DEFAULT_CONV_LAYER_CONFIG, SAMPLE_RATE, DataConfig, MaskingConfig
 from spidr.data.masks import MaskGenerator
@@ -213,15 +213,20 @@ class SpeechDataset(Dataset, abc.ABC):
 
 class SpeechDatasetFromArchive(SpeechDataset):
     def _load_audio(self, index: int) -> tuple[Tensor, int]:
-        entry = self.manifest[index].to_dicts()[0]
-        data = bytes_from_archive(entry["archive"], entry["byte_offset"], entry["byte_size"])
-        samples = AudioDecoder(data).get_all_samples()
+        archive = self.manifest[index, "archive"]
+        byte_offset = self.manifest[index, "byte_offset"]
+        byte_size = self.manifest[index, "byte_size"]
+        suffix = Path(self.manifest[index, "path"]).suffix
+        data = bytes_from_archive(archive, byte_offset, byte_size)
+        samples = (WavDecoder if suffix == ".wav" else AudioDecoder)(data).get_all_samples()
         return samples.data, samples.sample_rate
 
 
 class SpeechDatasetFromFiles(SpeechDataset):
     def _load_audio(self, index: int) -> tuple[Tensor, int]:
-        samples = AudioDecoder(self.manifest[index, "path"]).get_all_samples()
+        path = self.manifest[index, "path"]
+        suffix = Path(path).suffix
+        samples = (WavDecoder if suffix == ".wav" else AudioDecoder)(path).get_all_samples()
         return samples.data, samples.sample_rate
 
 
