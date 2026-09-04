@@ -10,7 +10,7 @@ from torch import Tensor
 
 from spidr.config import SpidRConfig
 from spidr.models.dinosr import DinoSR
-from spidr.models.metrics import perplexity
+from spidr.models.metrics import perplexities
 
 
 def exp_ema_scheduler(step: int, start_decay: float, timescale: float, threshold: float) -> float:
@@ -71,13 +71,12 @@ class SpidR(DinoSR):
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
             targets = [F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2)[mask_indices] for tl in targets]
 
+        onehot_targets = self.codebooks.quantize(targets)
         losses = torch.zeros(log_preds[0].shape[0], device=x.device)
-        target_ppl, pred_ppl = torch.zeros((), device=x.device), torch.zeros((), device=x.device)
-        for log_pred, onehot_target in zip(log_preds, self.codebooks.quantize(targets), strict=True):
-            target_ppl += perplexity(onehot_target)
-            pred_ppl += perplexity(log_pred.exp())
+        for log_pred, onehot_target in zip(log_preds, onehot_targets, strict=True):
             losses += torch.sum(-onehot_target * log_pred, dim=-1)
-
+        ppls = perplexities(onehot_targets + [log_pred.exp() for log_pred in log_preds])
+        target_ppl, pred_ppl = ppls[: self.num_codebooks].sum(), ppls[self.num_codebooks :].sum()
         return (losses / self.num_codebooks), {
             "target_ppl": target_ppl / self.num_codebooks,
             "pred_ppl": pred_ppl / self.num_codebooks,

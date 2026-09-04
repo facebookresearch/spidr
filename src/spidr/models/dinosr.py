@@ -11,7 +11,7 @@ from torch.nn import functional as F
 
 from spidr.config import DinoSRConfig
 from spidr.models.components import Transformer, get_components
-from spidr.models.metrics import perplexity
+from spidr.models.metrics import perplexities
 
 
 def ema_scheduler(step: int, start_decay: float, final_decay: float, final_step: int, freeze_step: int) -> float:
@@ -140,14 +140,13 @@ class DinoSR(nn.Module):
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
             targets = [F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2)[mask_indices] for tl in targets]
 
+        onehot_targets = self.codebooks.quantize(targets)
+        log_preds = [self.heads[i](x) for i in range(self.num_codebooks)]
         losses = torch.zeros(x.shape[0], device=x.device)
-        target_ppl, pred_ppl = torch.zeros(1, device=x.device), torch.zeros(1, device=x.device)
-        for i, onehot_target in enumerate(self.codebooks.quantize(targets)):
-            log_pred = self.heads[i](x)
-            target_ppl += perplexity(onehot_target)
-            pred_ppl += perplexity(log_pred.exp())
+        for onehot_target, log_pred in zip(onehot_targets, log_preds, strict=True):
             losses += torch.sum(-onehot_target * log_pred, dim=-1)
-
+        ppls = perplexities(onehot_targets + [log_pred.exp() for log_pred in log_preds])
+        target_ppl, pred_ppl = ppls[: self.num_codebooks].sum(), ppls[self.num_codebooks :].sum()
         return (losses / self.num_codebooks), {
             "target_ppl": target_ppl / self.num_codebooks,
             "pred_ppl": pred_ppl / self.num_codebooks,

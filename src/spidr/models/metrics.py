@@ -16,20 +16,18 @@ from torch import distributed as dist
 
 @torch.no_grad()
 @torch.compiler.disable
-def perplexity(y: Tensor, *, tokenwise: bool = False) -> Tensor:
-    if tokenwise:
-        y = torch.exp2((-y * (y + 1e-8).log2()).sum(-1))
+def perplexities(ys: Sequence[Tensor]) -> Tensor:
+    if len({y.size(0) for y in ys}) != 1:
+        raise ValueError("All inputs must share the same leading dimension")
+    sums = torch.stack([y.sum(0) for y in ys])
     if dist.is_initialized():
-        n = torch.tensor([y.size(0)], device=y.device)
-        y = y.sum(0)
+        n = torch.tensor(ys[0].size(0), device=ys[0].device)
         dist.all_reduce(n)
-        dist.all_reduce(y)
-        y /= n
+        dist.all_reduce(sums)
+        sums = sums / n
     else:
-        y = y.mean(0)
-    if not tokenwise:
-        y = torch.exp2((-y * (y + 1e-8).log2()).sum())
-    return y
+        sums = sums / ys[0].size(0)
+    return torch.exp2((-sums * (sums + 1e-8).log2()).sum(-1))
 
 
 class NonFiniteError(Exception):
