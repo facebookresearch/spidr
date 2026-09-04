@@ -98,20 +98,18 @@ class ConvPositionalEmbedding(nn.Module):
         )
 
     def forward(self, x: Tensor, attention_mask: Tensor | None = None) -> Tensor:
-        mask = (
-            torch.ones_like(x, dtype=torch.bool).transpose(-2, -1)
-            if attention_mask is None
-            else attention_mask[:, :, 0]
-        )
+        mask = None if attention_mask is None else attention_mask[:, :, 0]
         x = x.transpose(-2, -1)
         for conv in self.convs:
-            x = x * mask
+            if mask is not None:
+                x = x * mask
             x = conv(x)
             if self.num_remove > 0:
                 x = x[..., : -self.num_remove]
             x = self.layer_norm(x)
             x = F.gelu(x)
-        x = x * mask
+        if mask is not None:
+            x = x * mask
         return x.transpose(-2, -1)
 
 

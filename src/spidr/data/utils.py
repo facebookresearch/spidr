@@ -3,6 +3,8 @@
 
 import mmap
 import os
+import resource
+from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
@@ -20,9 +22,22 @@ def num_samples(source: str | Path | bytes, *, verify: bool = False) -> int:
     return int(samples)
 
 
+def _archive_cache_maxsize() -> int:
+    soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+    return max(64, soft_limit // 2)
+
+
+@lru_cache(maxsize=_archive_cache_maxsize())
+def _archive_mmap(archive: str) -> mmap.mmap:
+    # mmap dups the file descriptor internally, so the file handle doesn't need to stay open.
+    # Cached for the lifetime of the (worker) process: reused across every sample from this archive.
+    with Path(archive).open("rb") as file:
+        return mmap.mmap(file.fileno(), length=0, access=mmap.ACCESS_READ)
+
+
 def bytes_from_archive(archive: Path | str, offset: int, file_size: int) -> bytes:
-    with Path(archive).open("rb") as path, mmap.mmap(path.fileno(), length=0, access=mmap.ACCESS_READ) as mmap_o:
-        return mmap_o[offset : offset + file_size]
+    mmap_o = _archive_mmap(str(archive))
+    return mmap_o[offset : offset + file_size]
 
 
 def read_manifest(path: Path | str) -> pl.DataFrame:

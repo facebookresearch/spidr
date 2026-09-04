@@ -13,17 +13,15 @@ class AverageMeter:
         self.reset()
 
     def reset(self) -> None:
-        self.avg = torch.zeros((), device=self.device, dtype=self.dtype)
         self.sum = torch.zeros((), device=self.device, dtype=self.dtype)
         self.count = torch.zeros((), device=self.device, dtype=torch.long)
 
     def update(self, val: torch.Tensor, n: int = 1) -> None:
         self.sum += val * n
         self.count += n
-        self.avg = self.sum / self.count
 
     def pop(self) -> float:
-        avg = self.avg
+        avg = self.sum / self.count
         self.reset()
         return avg.item()
 
