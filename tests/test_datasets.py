@@ -107,8 +107,8 @@ def test_build_dataloader_yields_collated_batches(file_manifest: Path) -> None:
         MaskingConfig(),
         conv_layer_config=[(8, 10, 5), (8, 8, 4)],
     )
-    waveforms, attn_mask, mask = next(iter(loader))
+    waveforms, attn_mask, mask_index = next(iter(loader))
     assert waveforms.ndim == 2
     assert attn_mask is None  # enable_padding is off by default, so batches are cropped.
-    assert mask.shape[0] == waveforms.shape[0]
-    assert mask.dtype == torch.bool
+    assert mask_index.shape[0] == waveforms.shape[0]
+    assert mask_index.dtype == torch.int64  # Masked positions, not a boolean mask.

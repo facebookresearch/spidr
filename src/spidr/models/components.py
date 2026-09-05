@@ -13,6 +13,23 @@ from torch.nn import functional as F
 from spidr.config import DinoSRConfig
 
 
+def mask_from_index(index: Tensor, size: int) -> Tensor:
+    """Expand masked positions of shape `(batch, num_masked)` into a `(batch, size)` boolean mask."""
+    mask = torch.zeros((index.shape[0], size), dtype=torch.bool, device=index.device)
+    return mask.scatter_(1, index, value=True)
+
+
+def select_masked(x: Tensor, index: Tensor) -> Tensor:
+    """Gather the masked frames of `(batch, frame, feature)` into `(batch * num_masked, feature)`.
+
+    Equivalent to `x[torch.nonzero(mask, as_tuple=True)]` for the boolean mask that `index` encodes,
+    because the positions are sorted and every row holds the same number of them. Unlike `nonzero`,
+    the output shape is known ahead of time, so this neither synchronises with the host nor breaks
+    the `torch.compile` graph.
+    """
+    return x.take_along_dim(index.unsqueeze(-1), dim=1).flatten(0, 1)
+
+
 class LayerNorm(nn.LayerNorm):
     """Layer norm with transpose."""
 

@@ -76,9 +76,14 @@ def compute_mask_indices(
     no_overlap: bool,
     generator: torch.Generator | None,
 ) -> Tensor:
-    """Compute random mask spans for a given shape."""
+    """Compute random mask spans, as the sorted masked positions of shape `(batch, num_masked)`.
+
+    Rows with more spans than the sparsest one are subsampled down to it, so every row holds the
+    same number of positions and the result is rectangular. Returning positions rather than a
+    boolean mask keeps `torch.nonzero` -- and the device-to-host sync it forces -- out of the
+    model's forward: see `spidr.models.components.select_masked`.
+    """
     batch_size, frame = shape
-    mask = torch.full((batch_size, frame), fill_value=False)
     # add a random number for probabilistic rounding
     all_num_mask = int(mask_prob * frame / float(mask_length) + torch.rand(1, generator=generator))
     all_num_mask = max(min_masks, all_num_mask)
@@ -103,13 +108,13 @@ def compute_mask_indices(
         mask_idcs.append(torch.unique(mask_idc[mask_idc < sz]))
 
     min_len = min(len(m) for m in mask_idcs)
+    index = torch.empty((batch_size, min_len), dtype=torch.int64)
     for i, mask_idc in enumerate(mask_idcs):
         if len(mask_idc) > min_len:
             idx = torch.randperm(len(mask_idc), generator=generator)[:min_len].long()
-            mask[i, mask_idc[idx]] = True
-        else:
-            mask[i, mask_idc] = True
-    return mask
+            mask_idc = mask_idc[idx].sort().values  # `torch.unique` above already sorted the other branch.
+        index[i] = mask_idc.long()
+    return index
 
 
 class MaskGenerator(nn.Module):
@@ -128,7 +133,7 @@ class MaskGenerator(nn.Module):
     ) -> tuple[Tensor | None, Tensor | None]:
         batch, time = padding_mask.shape
         if self.config.mask_prob > 0:
-            mask_indices = compute_mask_indices(
+            mask_index = compute_mask_indices(
                 (batch, time),
                 padding_mask,
                 self.config.mask_prob,
@@ -141,11 +146,11 @@ class MaskGenerator(nn.Module):
                 generator=generator,
             )
         else:
-            mask_indices = None
+            mask_index = None
         if self.config.mask_channel_prob > 0:
             if channels is None:
                 raise ValueError("Must set 'channels' to mask channel-wise")
-            mask_channel_indices = compute_mask_indices(
+            channel_index = compute_mask_indices(
                 (batch, channels),
                 None,
                 self.config.mask_channel_prob,
@@ -157,7 +162,9 @@ class MaskGenerator(nn.Module):
                 no_overlap=self.config.no_mask_channel_overlap,
                 generator=generator,
             )
-            mask_channel_indices = mask_channel_indices.unsqueeze(1).expand(-1, time, -1)
+            # Channel masking is consumed as a boolean mask broadcast over time, not as positions.
+            channel_mask = torch.zeros((batch, channels), dtype=torch.bool).scatter_(1, channel_index, value=True)
+            mask_channel_indices = channel_mask.unsqueeze(1).expand(-1, time, -1)
         else:
             mask_channel_indices = None
-        return mask_indices, mask_channel_indices
+        return mask_index, mask_channel_indices

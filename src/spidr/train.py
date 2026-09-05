@@ -92,7 +92,7 @@ def train(cfg: Config) -> None:
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
         if cfg.run.compile:
             model.compile(dynamic=True)
-            model._inner_ema = torch.compile(model._inner_ema)  # ty: ignore[invalid-assignment]
+            model.update_ema = torch.compile(model.update_ema)  # ty: ignore[invalid-assignment]
 
         def wrap_ddp() -> DistributedDataParallel:
             return DistributedDataParallel(
@@ -110,16 +110,17 @@ def train(cfg: Config) -> None:
             epoch += 1
             loader.batch_sampler.set_epoch(epoch)  # ty: ignore[unresolved-attribute]
             logger.info("Starting epoch %s", epoch)
-            for waveforms_cpu, attn_mask_cpu, mask_cpu in loader:
+            for waveforms_cpu, attn_mask_cpu, mask_index_cpu in loader:
                 if step >= cfg.optimizer.max_steps:
                     break
                 waveforms = waveforms_cpu.to(device, non_blocking=True)
                 attn_mask = attn_mask_cpu.to(device, non_blocking=True) if attn_mask_cpu is not None else None
-                mask = mask_cpu.to(device, non_blocking=True)
-                num_frames = mask.sum()
+                mask_index = mask_index_cpu.to(device, non_blocking=True)
+                # The collator masks the same number of frames in every row, so the count is a shape.
+                num_frames = torch.full((), mask_index.numel(), dtype=torch.int64, device=device)
                 num_frames_work = dist.all_reduce(num_frames, async_op=True)
                 with torch.autocast("cuda", dtype, cfg.optimizer.mixed_precision):
-                    loss, outputs = ddp_model(waveforms, mask=mask, attention_mask=attn_mask)
+                    loss, outputs = ddp_model(waveforms, mask_index=mask_index, attention_mask=attn_mask)
                 num_frames_work.wait()
                 loss = loss.sum() * world_size / num_frames
                 scaler.scale(loss).backward()
@@ -131,15 +132,22 @@ def train(cfg: Config) -> None:
                 lr = scheduler.get_last_lr()[0]
                 scheduler.step()
                 step += 1
-                ema_decay = model.update_ema(step)
-                if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
-                    remove_param_group(optimizer, scheduler, 1)
-                    ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
+                ema_decay = model.update_ema()  # Advances `model.current_step` in lockstep with `step`.
+                if not model.extractor_frozen and step >= cfg.model.freeze_step:
+                    model.freeze_extractor()
+                    if len(optimizer.param_groups) > 1:
+                        remove_param_group(optimizer, scheduler, 1)
+                        ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
                 meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm)
                 meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
                 pbar.update()
                 if is_main and step % cfg.run.log_interval == 0:
-                    infos = meters.pop() | {"lr": lr, "ema_decay": ema_decay * 1000, "step": step, "epoch": epoch}
+                    infos = meters.pop() | {
+                        "lr": lr,
+                        "ema_decay": float(ema_decay) * 1000,  # Only synced on a logging step.
+                        "step": step,
+                        "epoch": epoch,
+                    }
                     wandb.log({f"train/{key}": value for key, value in infos.items()})
                     pbar.set_postfix(loss=infos["loss"], target_ppl=infos["target_ppl"], pred_ppl=infos["pred_ppl"])
                 if is_main and ckpt.save(step, epoch):
