@@ -9,16 +9,12 @@ from pathlib import Path
 from typing import NamedTuple
 
 import torch
-import torch.compiler
 from torch import Tensor
 from torch import distributed as dist
 
 
 @torch.no_grad()
-@torch.compiler.disable
 def perplexities(ys: Sequence[Tensor]) -> Tensor:
-    if len({y.size(0) for y in ys}) != 1:
-        raise ValueError("All inputs must share the same leading dimension")
     sums = torch.stack([y.sum(0) for y in ys])
     if dist.is_initialized():
         n = torch.tensor(ys[0].size(0), device=ys[0].device)

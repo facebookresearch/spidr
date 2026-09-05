@@ -39,10 +39,11 @@ def test_perplexities_is_order_preserving() -> None:
         torch.testing.assert_close(batched[i], perplexities([y])[0])
 
 
-def test_perplexities_rejects_ragged_inputs() -> None:
-    """The row count is read from the first tensor, so a mismatch would divide the rest wrongly."""
-    with pytest.raises(ValueError, match="same leading dimension"):
-        perplexities([torch.rand(4, 8), torch.rand(5, 8)])
+def test_perplexities_normalizes_ragged_inputs_by_the_first_row_count() -> None:
+    """A shared leading dimension is an unchecked precondition: every input is divided by `ys[0]`'s."""
+    first, second = make_distributions(1, rows=4)[0], make_distributions(1, rows=5)[0]
+    scaled = second * second.size(0) / first.size(0)  # What dividing by the wrong row count amounts to
+    torch.testing.assert_close(perplexities([first, second])[1], reference_perplexity(scaled))
 
 
 def test_perplexities_does_not_build_a_graph() -> None:

@@ -11,7 +11,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch._appdirs
+import torch._dynamo.config
 import torch._inductor.config
+import torch._inductor.lowering
 from torch import distributed as dist
 
 from spidr.tools import init_logger
@@ -94,11 +96,28 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
+def keep_conv_backward_dynamic() -> None:
+    """Make Inductor lower `convolution_backward` to ATen so it stops specializing the frame count."""
+    if torch.version.hip is not None:
+        return
+    op = torch.ops.aten.convolution_backward.default
+    if op not in torch._inductor.lowering.lowerings:
+        logger.debug("No lowering registered for %s, leaving it alone", op)
+        return
+    del torch._inductor.lowering.lowerings[op]
+    torch._inductor.lowering.make_fallback(op, warn=False, override_decomp=True)
+    logger.debug("Lowering %s to ATen to keep the sequence length dynamic", op)
+
+
 def setup_pytorch(*, use_deterministic: bool) -> None:
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
     torch.backends.cudnn.benchmark = False  # Needed because of dynamic input size
+    # `torch.nonzero` in the models selects the masked frames: without this, its data-dependent
+    # output shape makes Dynamo break the graph instead of tracing through with an unbacked size.
+    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+    keep_conv_backward_dynamic()
     if use_deterministic:
         torch.use_deterministic_algorithms(mode=True)
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

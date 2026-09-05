@@ -225,14 +225,20 @@ class Transformer(nn.Module):
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0)
 
+    def _drop_layers(self, device: torch.device) -> Tensor | None:
+        if self.layer_drop <= 0 or not self.training:
+            return None
+        return torch.rand(len(self.layers), device=device) <= self.layer_drop
+
     def forward(self, x: Tensor, attention_mask: Tensor | None = None) -> Tensor:
         x = x + self.pos_conv_embed(x, attention_mask)
         if self.layer_norm_first:
             x = self.layer_norm(x)
         x = self.dropout(x)
-        for layer in self.layers:
-            if not (self.layer_drop > 0 and self.training and bool(torch.rand(1) <= self.layer_drop)):
-                x, _ = layer(x, attention_mask)
+        drop = self._drop_layers(x.device)
+        for i, layer in enumerate(self.layers):
+            x_output, _ = layer(x, attention_mask)
+            x = x_output if drop is None else torch.where(drop[i], x, x_output)
         if not self.layer_norm_first:
             x = self.layer_norm(x)
         return x
@@ -254,10 +260,10 @@ class Transformer(nn.Module):
         if self.layer_norm_first:
             x = self.layer_norm(x)
         x = self.dropout(x)
-        for layer in self.layers:
+        drop = self._drop_layers(x.device)
+        for i, layer in enumerate(self.layers):
             x_output, layer_result = layer(x, attention_mask)
-            if not (self.layer_drop > 0 and self.training and bool(torch.rand(1) <= self.layer_drop)):
-                x = x_output
+            x = x_output if drop is None else torch.where(drop[i], x, x_output)
             ret.append(layer_result if before_residual else x_output)
             if num_layers is not None and len(ret) >= num_layers:
                 return ret
@@ -279,7 +285,8 @@ class Codebook(nn.Module):
     @torch.no_grad()
     def forward(self, target: Tensor) -> Tensor:
         codebook = self.codebook / self.counts.unsqueeze(1)
-        labels = torch.cdist(target, codebook, p=2).argmin(1)
+        with torch.autocast(target.device.type, enabled=False):  # cf test_codebook_assigns_the_same_codeword_as_cdist
+            labels = torch.addmm(codebook.square().sum(1), target, codebook.t(), alpha=-2).argmin(1)
         return F.one_hot(labels, self.codebook_size).float()
 
     @torch.no_grad()

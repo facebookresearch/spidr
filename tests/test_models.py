@@ -6,6 +6,8 @@ from typing import cast
 
 import pytest
 import torch
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from torch import nn
 
 from spidr.config import DinoSRConfig, SpidRConfig
@@ -150,6 +152,49 @@ def test_quantize_matches_updating_each_codebook_separately(tiny_spidr_config: S
     for expected, actual in zip(reference, batched, strict=True):
         torch.testing.assert_close(expected.codebook, actual.codebook)
         torch.testing.assert_close(expected.counts, actual.counts)
+
+
+@given(
+    rows=st.integers(min_value=1, max_value=64),  # `cdist` switches to its matmul form above 25 rows
+    dim=st.integers(min_value=2, max_value=32),
+    size=st.integers(min_value=2, max_value=32),
+    scale=st.floats(min_value=0.1, max_value=10.0),
+    seed=st.integers(min_value=0, max_value=2**31 - 1),
+)
+@settings(deadline=None)
+def test_codebook_assigns_the_same_codeword_as_cdist(rows: int, dim: int, size: int, scale: float, seed: int) -> None:
+    """`Codebook.forward` expands `torch.cdist(target, entries).argmin(1)` into a single matmul.
+
+    Labels are not compared directly: both forms minimise the same quantity, so they can only differ
+    on a near-tie, and then either codeword is a nearest one. What must hold is that the codeword
+    actually chosen sits at the minimum distance. The tolerance admits a tie resolved either way --
+    a genuinely wrong assignment lands far outside it.
+    """
+    torch.manual_seed(seed)
+    codebook = Codebook(dim, size, 0.9)
+    target = torch.randn(rows, dim) * scale
+
+    labels = codebook(target).argmax(1)
+
+    entries = (codebook.codebook / codebook.counts.unsqueeze(1)).double()
+    distances = torch.cdist(target.double(), entries, p=2)
+    chosen = distances.gather(1, labels[:, None]).squeeze(1)
+    torch.testing.assert_close(chosen, distances.min(1).values, rtol=1e-5, atol=1e-5)
+
+
+def test_codebook_assignment_ignores_the_autocast_dtype() -> None:
+    """The matmul is wrapped in `autocast(enabled=False)` so assignment stays float32, as `cdist` was.
+
+    Sized so removing that wrapper is caught: at a smaller codebook bfloat16 happens to pick the same
+    codewords anyway, but here it moves several of them.
+    """
+    torch.manual_seed(0)
+    codebook = Codebook(256, 256, 0.9)
+    target = torch.randn(512, 256)
+    outside = codebook(target)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        inside = codebook(target)
+    assert torch.equal(outside, inside)
 
 
 def test_quantize_leaves_frozen_codebooks_untouched() -> None:

@@ -49,6 +49,7 @@ dev = [
   "prek>=0.5.2",
 ]
 test = [
+  "hypothesis>=6.167.1",
   "pytest>=9.1.1",
 ]
 
