@@ -26,8 +26,13 @@ def select_masked(x: Tensor, index: Tensor) -> Tensor:
     because the positions are sorted and every row holds the same number of them. Unlike `nonzero`,
     the output shape is known ahead of time, so this neither synchronises with the host nor breaks
     the `torch.compile` graph.
+
+    Offsetting the positions into the flattened view keeps the gather index at `batch * num_masked`
+    entries. Going through `take_along_dim` instead would broadcast it out to one entry per feature,
+    which measured slower than the advanced indexing this replaced rather than faster.
     """
-    return x.take_along_dim(index.unsqueeze(-1), dim=1).flatten(0, 1)
+    offsets = torch.arange(x.shape[0], device=index.device).unsqueeze(1) * x.shape[1]
+    return x.flatten(0, 1).index_select(0, (index + offsets).reshape(-1))
 
 
 class LayerNorm(nn.LayerNorm):

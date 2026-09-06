@@ -159,7 +159,9 @@ def test_forward_does_not_sync_with_the_host(tiny_spidr_config: SpidRConfig) -> 
         targets, actual = capture_dynamo_graphs(model, waveforms, mask_index=mask_index)
 
     assert [target for target in targets if any(op in target for op in SYNCING_OPS)] == []
-    assert any("take_along_dim" in target for target in targets)
+    # Boolean indexing would show up as a bare `getitem` and calls `nonzero` underneath, so require
+    # one of the gathers whose output shape is known up front.
+    assert any(op in target for target in targets for op in ("index_select", "take_along_dim", "gather"))
     torch.testing.assert_close(cast("tuple[torch.Tensor, ...]", actual)[0], expected)
 
 

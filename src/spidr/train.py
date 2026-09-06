@@ -91,6 +91,13 @@ def train(cfg: Config) -> None:
         if not resuming and is_main and ckpt.save(step, epoch):
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
         if cfg.run.compile:
+            # The forward compiles into a single graph, which DDPOptimizer then splits at bucket
+            # boundaries. Under dynamic shapes a split submodule ends up returning a symbolic size,
+            # and AOTAutograd raises "'int' object has no attribute 'meta'" on it. Disabling the
+            # split keeps the whole graph together; DDP still overlaps its all-reduces with the
+            # backward through the autograd hooks, just from the end of the graph rather than
+            # bucket by bucket.
+            torch._dynamo.config.optimize_ddp = False
             model.compile(dynamic=True)
             model.update_ema = torch.compile(model.update_ema)  # ty: ignore[invalid-assignment]
 
