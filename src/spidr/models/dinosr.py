@@ -14,17 +14,13 @@ from spidr.models.components import Transformer, get_components, mask_from_index
 from spidr.models.metrics import perplexities
 
 
-def ema_scheduler(step: Tensor, start_decay: float, final_decay: float, final_step: int, freeze_step: int) -> Tensor:
-    """Ramp the decay from `start_decay` to `final_decay`, hold it, then freeze the teacher.
-
-    Takes and returns a 0-dim tensor: the schedule is evaluated on the model's device, without a
-    host round-trip, so that `DinoSR.update_ema` stays compilable. The arithmetic runs in float64
-    to match the Python-float schedule this replaced, then narrows to the parameters' float32.
-    """
-    progress = step.double() / final_step
-    ramp = final_decay - (final_decay - start_decay) * (1 - progress)
-    held = torch.where(step < freeze_step, torch.full_like(ramp, final_decay), torch.ones_like(ramp))
-    return torch.where(step < final_step, ramp, held).float()
+def ema_scheduler(step: int, start_decay: float, final_decay: float, final_step: int, freeze_step: int) -> float:
+    if step < final_step:
+        pct = 1 - step / final_step
+        return final_decay - (final_decay - start_decay) * pct
+    if step < freeze_step:
+        return final_decay
+    return 1
 
 
 def init_teacher(
@@ -48,10 +44,9 @@ def _split_ema_targets(
 ) -> tuple[list[Tensor], list[Tensor], list[Tensor], list[Tensor]]:
     """Pair every teacher tensor with its student counterpart, split by how the EMA treats it.
 
-    The first pair of lists is averaged; the second -- excluded layers and buffers -- tracks the
-    student exactly. Keeping them apart lets `DinoSR.update_ema` run as two `_foreach` calls with no
-    Python branch per tensor. Caching the tensors is safe for the life of the model: `.to()` and
-    `load_state_dict` both mutate parameters and buffers in place.
+    The first pair of lists is averaged, the second -- excluded layers and buffers -- tracks the
+    student exactly, so `DinoSR.update_ema` needs no Python branch per tensor. Caching the tensors is
+    safe for the life of the model: `.to()` and `load_state_dict` both mutate them in place.
     """
     lerp_teacher, lerp_student, copy_teacher, copy_student = [], [], [], []
     for (name, teacher_param), student_param in zip(teacher.named_parameters(), student.parameters(), strict=True):
@@ -62,8 +57,6 @@ def _split_ema_targets(
             lerp_teacher.append(teacher_param)
             lerp_student.append(student_param)
     for teacher_buffer, student_buffer in zip(teacher.buffers(), student.buffers(), strict=True):
-        if not teacher_buffer.is_floating_point():
-            raise TypeError(f"The EMA cannot track the non-floating point teacher buffer {teacher_buffer.dtype}")
         copy_teacher.append(teacher_buffer)
         copy_student.append(student_buffer)
     return lerp_teacher, lerp_student, copy_teacher, copy_student
@@ -106,10 +99,6 @@ class DinoSR(nn.Module):
     def num_codebooks(self) -> int:
         return len(self.codebooks)
 
-    @property
-    def extractor_frozen(self) -> bool:
-        return self._extractor_frozen
-
     def freeze_extractor(self) -> None:
         for p in self.feature_extractor.parameters():
             p.requires_grad = False
@@ -118,27 +107,22 @@ class DinoSR(nn.Module):
         self._extractor_frozen = True
 
     @torch.no_grad()
-    def update_ema(self) -> Tensor:
-        """Advance `current_step` by one and move the teacher towards the student. Returns the decay.
+    def update_ema(self, step: int) -> float:
+        """Move the teacher towards the student, as two `_foreach` calls rather than one op per tensor.
 
-        Every operation runs on the model's device over tensors of known shape -- no host sync, no
-        Python branch, no per-parameter kernel -- so the whole update can be `torch.compile`d. The
-        caller owns the step counter only in the sense that it must call this exactly once per
-        optimizer step; the value itself lives in the `current_step` buffer and survives checkpoints.
-
-        Outside `0 < decay < 1` the teacher is left untouched, matching the schedules' endpoints: a
-        decay of 1 freezes it and a decay of 0 is treated as "not yet running". Both fall out of the
-        lerp weights rather than a branch, and `lerp` is exact at weight 0 and 1.
+        `step` is a host int, so the schedule stays plain Python and reads nothing back from the
+        device. That leaves the GPU one kernel per dtype instead of a few hundred per step, which is
+        already at the memory bandwidth floor, so the training loop runs this eagerly.
         """
-        self.current_step.add_(1)  # In place: `+=` would re-register the buffer and break the graph.
-        decay = self.ema_scheduler(self.current_step.reshape(()))
-        running = (decay > 0) & (decay < 1)
-        if self._ema_lerp_teacher:
-            weight = torch.where(running, 1 - decay, torch.zeros_like(decay))
-            # The stubs only know the scalar weights; the tensor overload keeps the weight on device.
-            torch._foreach_lerp_(self._ema_lerp_teacher, self._ema_lerp_student, weight)  # ty: ignore[no-matching-overload]
-        if self._ema_copy_teacher:  # A weight of exactly 1 makes `lerp` a copy, and 0 a no-op.
-            torch._foreach_lerp_(self._ema_copy_teacher, self._ema_copy_student, running.to(decay.dtype))  # ty: ignore[no-matching-overload]
+        self.current_step.fill_(step)
+        decay = self.ema_scheduler(step)
+        if not self._extractor_frozen and step >= self.freeze_step:
+            self.freeze_extractor()
+        if 0.0 < decay < 1.0:  # The guards are for `_foreach`, which rejects an empty tensor list.
+            if self._ema_lerp_teacher:
+                torch._foreach_lerp_(self._ema_lerp_teacher, self._ema_lerp_student, 1 - decay)
+            if self._ema_copy_teacher:
+                torch._foreach_copy_(self._ema_copy_teacher, self._ema_copy_student)
         return decay
 
     def get_intermediate_outputs(self, waveforms: Tensor, *, attention_mask: Tensor | None = None) -> list[Tensor]:
@@ -165,24 +149,24 @@ class DinoSR(nn.Module):
         return codebooks
 
     def forward(
-        self, waveforms: Tensor, *, mask_index: Tensor | None = None, attention_mask: Tensor | None = None
+        self, waveforms: Tensor, *, mask_indices: Tensor | None = None, attention_mask: Tensor | None = None
     ) -> tuple[Tensor, dict[str, Tensor]]:
         feats = self.feature_extractor(waveforms)
         feats = self.feature_projection(feats)
         x = feats.clone()
         x = self.projection_dropout(x)
-        if mask_index is not None:
-            mask = mask_from_index(mask_index, x.shape[1])
+        if mask_indices is not None:
+            mask = mask_from_index(mask_indices, x.shape[1])
             x = torch.where(mask.unsqueeze(-1), self.mask_embedding.to(x.dtype).expand_as(x), x)
         else:  # Nothing is masked out, so every frame is predicted.
-            mask_index = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
+            mask_indices = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
         x = self.student(x, attention_mask)
-        x = select_masked(x, mask_index)
+        x = select_masked(x, mask_indices)
 
         with torch.no_grad():
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
             targets = [
-                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_index)
+                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_indices)
                 for tl in targets
             ]
 

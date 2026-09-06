@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Meta Platforms, Inc. and affiliates.
 """SpidR model implementation."""
 
+import math
 from functools import partial
 
 import torch
@@ -13,14 +14,9 @@ from spidr.models.dinosr import DinoSR
 from spidr.models.metrics import perplexities
 
 
-def exp_ema_scheduler(step: Tensor, start_decay: float, timescale: float, threshold: float) -> Tensor:
-    """Decay approaching 1 exponentially, snapping to it once the teacher would barely move.
-
-    Takes and returns a 0-dim tensor, in float64 then narrowed to float32, for the same reasons as
-    `spidr.models.dinosr.ema_scheduler`.
-    """
-    decay = 1 - (1 - start_decay) * torch.exp(-step.double() / timescale)
-    return torch.where(1 - decay > threshold, decay, torch.ones_like(decay)).float()
+def exp_ema_scheduler(step: int, start_decay: float, timescale: float, threshold: float) -> float:
+    decay = 1 - (1 - start_decay) * math.exp(-step / timescale)
+    return decay if 1 - decay > threshold else 1
 
 
 class SpidR(DinoSR):
@@ -56,26 +52,26 @@ class SpidR(DinoSR):
         return preds
 
     def forward(
-        self, waveforms: Tensor, *, mask_index: Tensor | None = None, attention_mask: Tensor | None = None
+        self, waveforms: Tensor, *, mask_indices: Tensor | None = None, attention_mask: Tensor | None = None
     ) -> tuple[Tensor, dict[str, Tensor]]:
         feats = self.feature_extractor(waveforms)
         feats = self.feature_projection(feats)
         x = feats.clone()
         x = self.projection_dropout(x)
-        if mask_index is not None:
-            mask = mask_from_index(mask_index, x.shape[1])
+        if mask_indices is not None:
+            mask = mask_from_index(mask_indices, x.shape[1])
             x = torch.where(mask.unsqueeze(-1), self.mask_embedding.to(x.dtype).expand_as(x), x)
         else:  # Nothing is masked out, so every frame is predicted.
-            mask_index = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
+            mask_indices = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
         log_preds = [
-            self.heads[i](select_masked(y, mask_index))
+            self.heads[i](select_masked(y, mask_indices))
             for i, y in enumerate(self.student.get_intermediate_outputs(x, attention_mask)[-self.num_codebooks :])
         ]
 
         with torch.no_grad():
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
             targets = [
-                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_index)
+                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_indices)
                 for tl in targets
             ]
 

@@ -281,8 +281,8 @@ class SpeechCollatorWithMasking:
         batch_size, max_len = wavs.size(0), int(lengths.max())
         padding_mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]
         attn_mask = ~padding_mask[:, None, None, :] if bool(padding_mask.any()) else None
-        mask_index = self.mask_generator(padding_mask)[0]
-        return wavs, attn_mask, mask_index
+        mask_indices = self.mask_generator(padding_mask)[0]
+        return wavs, attn_mask, mask_indices
 
 
 def build_dataloader(

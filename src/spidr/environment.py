@@ -114,9 +114,7 @@ def setup_pytorch(*, use_deterministic: bool) -> None:
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
     torch.backends.cudnn.benchmark = False  # Needed because of dynamic input size
-    # `torch.nonzero` in the models selects the masked frames: without this, its data-dependent
-    # output shape makes Dynamo break the graph instead of tracing through with an unbacked size.
-    torch._dynamo.config.capture_dynamic_output_shape_ops = True
+    torch._dynamo.config.optimize_ddp = False
     keep_conv_backward_dynamic()
     if use_deterministic:
         torch.use_deterministic_algorithms(mode=True)

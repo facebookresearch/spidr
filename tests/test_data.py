@@ -16,7 +16,6 @@ from spidr.data.dataset import (
     verify_lengths,
 )
 from spidr.data.masks import MaskGenerator
-from spidr.models.components import mask_from_index
 
 CONV_LAYER_CONFIG = [(8, 10, 5), (8, 8, 4)]
 NUM_LENGTHS = 200
@@ -99,37 +98,37 @@ def make_collator(*, enable_padding: bool) -> SpeechCollatorWithMasking:
 def test_collator_without_padding_returns_no_attention_mask() -> None:
     torch.manual_seed(0)
     batch = [torch.randn(4_000), torch.randn(5_000), torch.randn(4_500)]
-    wavs, attn_mask, mask_index = make_collator(enable_padding=False)(batch)
+    wavs, attn_mask, mask_indices = make_collator(enable_padding=False)(batch)
     assert wavs.shape == (3, 4_000)  # Cropped to the shortest waveform: no padding.
     assert attn_mask is None
-    assert mask_index is not None
+    assert mask_indices is not None
     num_frames = int(conv_length(CONV_LAYER_CONFIG, torch.tensor([4_000]))[0])
-    assert mask_index.shape[0] == 3
-    assert 0 < mask_index.shape[1] <= num_frames
-    assert int(mask_index.max()) < num_frames
+    assert mask_indices.shape[0] == 3
+    assert 0 < mask_indices.shape[1] <= num_frames
+    assert int(mask_indices.max()) < num_frames
 
 
 def test_collator_with_padding_returns_broadcastable_mask() -> None:
     torch.manual_seed(0)
     batch = [torch.randn(4_000), torch.randn(5_000), torch.randn(4_500)]
-    wavs, attn_mask, mask_index = make_collator(enable_padding=True)(batch)
+    wavs, attn_mask, mask_indices = make_collator(enable_padding=True)(batch)
     lengths = conv_length(CONV_LAYER_CONFIG, torch.tensor([4_000, 5_000, 4_500]))
     max_frames = int(lengths.max())
     assert wavs.shape == (3, 5_000)
     assert attn_mask is not None
-    assert mask_index is not None
+    assert mask_indices is not None
     assert attn_mask.shape == (3, 1, 1, max_frames)
     assert attn_mask.dtype == torch.bool
     for i, length in enumerate(lengths.tolist()):
         assert attn_mask[i, 0, 0, :length].all()
         assert not attn_mask[i, 0, 0, length:].any()
-    assert mask_index.shape[0] == 3
-    mask = mask_from_index(mask_index, max_frames)
+    assert mask_indices.shape[0] == 3
+    mask = torch.zeros(3, max_frames, dtype=torch.bool).scatter_(1, mask_indices, value=True)
     assert not (mask & ~attn_mask[:, 0, 0, :]).any()  # No masking inside padding.
 
 
-def test_mask_index_is_rectangular_and_sorted() -> None:
-    """The model gathers masked frames with `take_along_dim`, which needs both properties.
+def test_mask_indices_is_rectangular_and_sorted() -> None:
+    """`spidr.models.components.select_masked` needs both properties.
 
     Equal counts per row make the selection rectangular, and sorted positions make it reproduce the
     row-major order that `torch.nonzero` used to hand back.

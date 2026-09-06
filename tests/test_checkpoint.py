@@ -46,8 +46,7 @@ def test_resume_after_freeze_step(tiny_dinosr_config: DinoSRConfig, tmp_path: Pa
     model, optimizer, scaler, scheduler = make_state(tiny_dinosr_config, seed=0)
     checkpointer = make_checkpointer(tmp_path, model, optimizer, scaler, scheduler)
 
-    model.current_step.fill_(model.freeze_step)  # As the training loop would have left it.
-    model.freeze_extractor()
+    model.update_ema(model.freeze_step)  # Freezes the extractor and records the step.
     assert len(optimizer.param_groups) == 2
     remove_param_group(optimizer, scheduler, 1)
     assert len(optimizer.param_groups) == 1
@@ -69,7 +68,7 @@ def test_round_trip_preserves_codebook_buffers(tiny_dinosr_config: DinoSRConfig,
     model, optimizer, scaler, scheduler = make_state(tiny_dinosr_config, seed=0)
     checkpointer = make_checkpointer(tmp_path, model, optimizer, scaler, scheduler)
     torch.manual_seed(0)
-    model.train()(torch.randn(2, 1600), mask_index=torch.arange(78).expand(2, -1))
+    model.train()(torch.randn(2, 1600), mask_indices=torch.arange(78).expand(2, -1))
     assert checkpointer.save(10, 1)
 
     other_model, *other_state = make_state(tiny_dinosr_config, seed=1)
