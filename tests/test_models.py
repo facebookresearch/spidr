@@ -2,6 +2,7 @@
 """Tests for DinoSR and SpidR: forward, backward, EMA, codebook updates and layer drop."""
 
 import dataclasses
+from collections.abc import Callable
 from typing import cast
 
 import pytest
@@ -12,29 +13,36 @@ from torch import nn
 
 from spidr.config import DinoSRConfig, SpidRConfig
 from spidr.models import DinoSR, SpidR
-from spidr.models.components import Codebook, Codebooks, ConvPositionalEmbedding, get_components
+from spidr.models.components import (
+    Codebook,
+    Codebooks,
+    ConvPositionalEmbedding,
+    get_components,
+    mask_from_index,
+    select_masked,
+)
 from spidr.tools import AverageMeters
 
 BATCH_SIZE = 2
 NUM_SAMPLES = 1600
 NUM_FRAMES = 78  # (1600 - 10) // 5 + 1 = 319 frames, then (319 - 8) // 4 + 1 = 78.
+NUM_MASKED = 15
 
 
 def make_inputs() -> tuple[torch.Tensor, torch.Tensor]:
     torch.manual_seed(0)
     waveforms = torch.randn(BATCH_SIZE, NUM_SAMPLES)
-    mask = torch.zeros(BATCH_SIZE, NUM_FRAMES, dtype=torch.bool)
-    mask[:, 5:20] = True
-    return waveforms, mask
+    mask_indices = torch.arange(5, 5 + NUM_MASKED).expand(BATCH_SIZE, -1).contiguous()
+    return waveforms, mask_indices
 
 
 @pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
 def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
     model = model_cls(cfg).train()
-    waveforms, mask = make_inputs()
-    losses, outputs = model(waveforms, mask=mask, attention_mask=None)
-    assert losses.shape == (int(mask.sum()),)
+    waveforms, mask_indices = make_inputs()
+    losses, outputs = model(waveforms, mask_indices=mask_indices, attention_mask=None)
+    assert losses.shape == (BATCH_SIZE * NUM_MASKED,)
     assert torch.isfinite(losses).all()
     assert torch.isfinite(outputs["target_ppl"]).all()
     assert torch.isfinite(outputs["pred_ppl"]).all()
@@ -57,8 +65,8 @@ def test_every_trainable_parameter_receives_a_gradient(
     """Without layer drop there must be no unused parameters, or DDP needs find_unused_parameters."""
     cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
     model = model_cls(dataclasses.replace(cfg, encoder_layer_drop=0.0)).train()
-    waveforms, mask = make_inputs()
-    model(waveforms, mask=mask)[0].mean().backward()
+    waveforms, mask_indices = make_inputs()
+    model(waveforms, mask_indices=mask_indices)[0].mean().backward()
     without_grad = [name for name, p in model.named_parameters() if p.requires_grad and p.grad is None]
     assert without_grad == []
 
@@ -67,8 +75,8 @@ def test_every_trainable_parameter_receives_a_gradient(
 def test_perplexities_are_scalars_the_meters_accept(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """AverageMeter accumulates into a 0-dim tensor, so the metrics must be 0-dim too."""
     cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
-    waveforms, mask = make_inputs()
-    _, outputs = model_cls(cfg).train()(waveforms, mask=mask)
+    waveforms, mask_indices = make_inputs()
+    _, outputs = model_cls(cfg).train()(waveforms, mask_indices=mask_indices)
     assert outputs["target_ppl"].shape == ()
     assert outputs["pred_ppl"].shape == ()
     meters = AverageMeters(["target_ppl", "pred_ppl"], device=torch.device("cpu"))
@@ -76,27 +84,213 @@ def test_perplexities_are_scalars_the_meters_accept(model_cls: type[DinoSR], req
     assert set(meters.pop()) == {"target_ppl", "pred_ppl"}
 
 
-def test_ema_update_moves_teacher(tiny_dinosr_config: DinoSRConfig) -> None:
+@given(
+    batch=st.integers(min_value=1, max_value=6),
+    frames=st.integers(min_value=1, max_value=40),
+    dim=st.integers(min_value=1, max_value=8),
+    seed=st.integers(min_value=0, max_value=2**31 - 1),
+    data=st.data(),
+)
+@settings(deadline=None)
+def test_select_masked_matches_indexing_with_nonzero(
+    batch: int, frames: int, dim: int, seed: int, data: st.DataObject
+) -> None:
+    """`select_masked` replaced `x[torch.nonzero(mask, as_tuple=True)]`; the two must not differ."""
+    num_masked = data.draw(st.integers(min_value=0, max_value=frames))
+    generator = torch.Generator().manual_seed(seed)
+    index = torch.stack(
+        [torch.randperm(frames, generator=generator)[:num_masked].sort().values for _ in range(batch)]
+    ).reshape(batch, num_masked)
+    x = torch.randn(batch, frames, dim, generator=generator)
+
+    mask = mask_from_index(index, frames)
+    assert torch.equal(mask.sum(1), torch.full((batch,), num_masked))
+    assert torch.equal(torch.nonzero(mask, as_tuple=True)[1].reshape(batch, num_masked), index)
+    assert torch.equal(select_masked(x, index), x[torch.nonzero(mask, as_tuple=True)])
+
+
+def capture_dynamo_graphs(fn: Callable[..., object], *args: object, **kwargs: object) -> tuple[list[str], object]:
+    """Run `fn` under `torch.compile` and return the operators Dynamo traced, plus the result.
+
+    `fullgraph=True` alone would not prove there is no host sync: Dynamo traces `torch.nonzero` into
+    a single graph behind an unbacked symbol, and the sync then happens at runtime.
+    """
+    targets: list[str] = []
+
+    def backend(gm: torch.fx.GraphModule, _: object) -> object:
+        targets.extend(str(node.target) for node in gm.graph.nodes if node.op in ("call_function", "call_method"))
+        return gm.forward
+
+    result = torch.compile(fn, backend=backend, fullgraph=True)(*args, **kwargs)
+    return targets, result
+
+
+SYNCING_OPS = ("nonzero", "_local_scalar_dense", "method 'item'", "function item")
+
+
+class RecordTorchOps(torch.overrides.TorchFunctionMode):
+    """Record the name of every torch operator dispatched inside the block."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def __torch_function__(self, func: object, types: object, args: tuple = (), kwargs: dict | None = None) -> object:
+        self.names.append(getattr(func, "__name__", str(func)))
+        return func(*args, **(kwargs or {}))  # ty: ignore[call-non-callable]
+
+
+def test_forward_does_not_sync_with_the_host(tiny_spidr_config: SpidRConfig) -> None:
+    """The masked frames come from precomputed positions, so `torch.nonzero` no longer syncs here.
+
+    The output is compared against eager too, to catch a rewrite that traces cleanly but selects the
+    wrong frames.
+    """
+    waveforms, mask_indices = make_inputs()
+    model = SpidR(tiny_spidr_config).eval()
+    with torch.no_grad():
+        expected = model(waveforms, mask_indices=mask_indices)[0]
+        targets, actual = capture_dynamo_graphs(model, waveforms, mask_indices=mask_indices)
+
+    assert [target for target in targets if any(op in target for op in SYNCING_OPS)] == []
+    # Boolean indexing would show up as a bare `getitem` and calls `nonzero` underneath, so require
+    # one of the gathers whose output shape is known up front.
+    assert any(op in target for target in targets for op in ("index_select", "take_along_dim", "gather"))
+    torch.testing.assert_close(cast("tuple[torch.Tensor, ...]", actual)[0], expected)
+
+
+@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+def test_forward_without_a_mask_predicts_every_frame(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
+    """`mask_indices=None` selects every frame without substituting the mask embedding."""
+    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    waveforms, _ = make_inputs()
+    model = model_cls(cfg).eval()
+    with torch.no_grad():
+        unmasked = model(waveforms)[0]
+        every_frame_masked = model(waveforms, mask_indices=torch.arange(NUM_FRAMES).expand(BATCH_SIZE, -1))[0]
+    assert unmasked.shape == (BATCH_SIZE * NUM_FRAMES,)
+    assert torch.isfinite(unmasked).all()
+    assert not torch.allclose(unmasked, every_frame_masked)  # The embedding is substituted, not skipped.
+
+
+def reference_update_ema(model: DinoSR, step: int, decay: float) -> None:
+    """The per-parameter EMA loop that `DinoSR.update_ema` replaced, kept verbatim as an oracle."""
+    model.current_step.fill_(step)
+    if not 0.0 < decay < 1.0:
+        return
+    with torch.no_grad():
+        for (name, ema_p), model_p in zip(model.teacher.named_parameters(), model.student.parameters(), strict=True):
+            if name in model.teacher_exclude_layers:
+                ema_p.copy_(model_p)
+            else:
+                ema_p.lerp_(model_p, 1 - decay)
+        for ema_b, model_b in zip(model.teacher.buffers(), model.student.buffers(), strict=True):
+            ema_b.copy_(model_b)
+
+
+def jitter_student(model: DinoSR, generator: torch.Generator) -> None:
+    with torch.no_grad():
+        for param in model.student.parameters():
+            param.add_(torch.randn(param.shape, generator=generator) * 0.01)
+
+
+@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+def test_update_ema_matches_the_per_parameter_reference(
+    model_cls: type[DinoSR], request: pytest.FixtureRequest
+) -> None:
+    """The `_foreach` update must be bit-identical to the loop it replaced, over a whole schedule.
+
+    The schedules are shortened so the run covers the ramp, the hold, and the frozen tail.
+    """
+    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    cfg = (
+        dataclasses.replace(cfg, ema_final_step=6, freeze_step=11)
+        if model_cls is DinoSR
+        else dataclasses.replace(cfg, ema_timescale=3.0, ema_threshold=1e-4)
+    )
+    torch.manual_seed(0)
+    actual = model_cls(cfg)
+    torch.manual_seed(0)
+    expected = model_cls(cfg)
+    generator = torch.Generator().manual_seed(0)
+
+    for step in range(1, 16):
+        jitter_student(actual, generator)
+        with torch.no_grad():  # Keep both students identical; only the teacher update is under test.
+            for target, source in zip(expected.student.parameters(), actual.student.parameters(), strict=True):
+                target.copy_(source)
+        decay = actual.update_ema(step)
+        reference_update_ema(expected, step, decay)
+        for i, (a, b) in enumerate(zip(actual.teacher.parameters(), expected.teacher.parameters(), strict=True)):
+            assert torch.equal(a, b), f"teacher parameter {i} diverged at step {step}"
+        assert torch.equal(actual.current_step, expected.current_step)
+
+
+def test_ema_targets_partition_the_teacher(tiny_dinosr_config: DinoSRConfig) -> None:
+    """Every teacher tensor belongs to exactly one group, paired with its student counterpart."""
+    model = DinoSR(tiny_dinosr_config)
+    targets = model._ema_targets
+    teacher = dict(model.teacher.named_parameters())
+    grouped = targets["lerp_teacher"] + targets["copy_teacher"]
+
+    assert {id(t) for t in grouped} == {id(p) for p in teacher.values()}
+    assert len(grouped) == len(teacher)  # No tensor in both groups.
+    excluded = {id(teacher[name]) for name in model.teacher_exclude_layers}
+    assert excluded and excluded <= {id(t) for t in targets["copy_teacher"]}
+    for teacher_group, student_group in (
+        (targets["lerp_teacher"], targets["lerp_student"]),
+        (targets["copy_teacher"], targets["copy_student"]),
+    ):
+        assert all(t.shape == s.shape for t, s in zip(teacher_group, student_group, strict=True))
+
+
+def test_update_ema_still_targets_the_teacher_after_load_state_dict(tiny_dinosr_config: DinoSRConfig) -> None:
+    """`update_ema` writes through tensors cached at construction, which resuming must not stale.
+
+    `load_state_dict` copies into the existing parameters rather than rebinding them, so the cache
+    stays valid -- but writing into orphaned tensors would silently freeze the teacher on resume.
+    """
     model = DinoSR(tiny_dinosr_config).train()
+    other = DinoSR(dataclasses.replace(tiny_dinosr_config, encoder_dropout=0.0)).train()
+    model.load_state_dict(other.state_dict())
+
     teacher_before = [p.clone() for p in model.teacher.parameters()]
-    decay = model.update_ema(step=1)
-    assert 0.0 < decay < 1.0
-    changed = [
+    jitter_student(model, torch.Generator().manual_seed(0))
+    model.update_ema(step=1)
+    assert any(
         not torch.equal(before, after)
         for before, after in zip(teacher_before, model.teacher.parameters(), strict=True)
-    ]
-    assert any(changed)
-    assert int(model.current_step) == 1
+    )
 
 
-def test_ema_decay_buffer_stays_out_of_the_state_dict(tiny_dinosr_config: DinoSRConfig) -> None:
-    """`_ema_decay` is reused across steps but must not change the checkpoint format."""
+def test_ema_targets_stay_out_of_the_state_dict(tiny_dinosr_config: DinoSRConfig) -> None:
+    """The cache is a plain dict of tensors, so it must register nothing and leave the format alone."""
     model = DinoSR(tiny_dinosr_config)
     keys = set(model.state_dict())
     model.update_ema(step=1)
     assert set(model.state_dict()) == keys
-    assert "_ema_decay" not in keys
-    assert "_ema_decay" in dict(model.named_buffers())
+
+
+def test_update_ema_issues_the_same_operations_whatever_the_model_size(tiny_spidr_config: SpidRConfig) -> None:
+    """Two `_foreach` calls cover the whole teacher, so the op sequence must not grow with it.
+
+    The loop this replaced issued one op per parameter -- a few hundred kernels per step on a
+    base-size model. The schedule runs on the host, so it must also read nothing back from the device.
+    """
+    shallow = SpidR(tiny_spidr_config).train()
+    deep = SpidR(dataclasses.replace(tiny_spidr_config, encoder_num_layers=6)).train()
+    assert len(list(deep.teacher.parameters())) > 2 * len(list(shallow.teacher.parameters()))
+
+    with RecordTorchOps() as shallow_ops:
+        shallow.update_ema(step=1)
+    with RecordTorchOps() as deep_ops:
+        deep.update_ema(step=1)
+
+    assert shallow_ops.names == deep_ops.names
+    assert shallow_ops.names.count("_foreach_lerp_") == 1  # The averaged half.
+    assert shallow_ops.names.count("_foreach_copy_") == 1  # The excluded layers and the buffers.
+    assert "lerp_" not in shallow_ops.names
+    assert "copy_" not in shallow_ops.names
+    assert not {"nonzero", "item", "tolist", "_local_scalar_dense"} & set(shallow_ops.names)
 
 
 def test_ema_update_freezes_extractor(tiny_dinosr_config: DinoSRConfig) -> None:
@@ -110,16 +304,16 @@ def test_ema_update_freezes_extractor(tiny_dinosr_config: DinoSRConfig) -> None:
 
 
 def test_codebooks_update_in_train_but_not_eval(tiny_spidr_config: SpidRConfig) -> None:
-    waveforms, mask = make_inputs()
+    waveforms, mask_indices = make_inputs()
     model = SpidR(tiny_spidr_config).train()
     before = [codebook.codebook.clone() for codebook in model.codebooks]
-    model(waveforms, mask=mask)
+    model(waveforms, mask_indices=mask_indices)
     assert all(not torch.equal(b, c.codebook) for b, c in zip(before, model.codebooks, strict=True))
 
     model = model.eval()
     before = [codebook.codebook.clone() for codebook in model.codebooks]
     with torch.no_grad():
-        model(waveforms, mask=mask)
+        model(waveforms, mask_indices=mask_indices)
     assert all(torch.equal(b, c.codebook) for b, c in zip(before, model.codebooks, strict=True))
 
 

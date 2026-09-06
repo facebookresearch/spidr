@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from spidr.config import SpidRConfig
+from spidr.models.components import mask_from_index, select_masked
 from spidr.models.dinosr import DinoSR
 from spidr.models.metrics import perplexities
 
@@ -51,25 +52,28 @@ class SpidR(DinoSR):
         return preds
 
     def forward(
-        self, waveforms: Tensor, *, mask: Tensor | None = None, attention_mask: Tensor | None = None
+        self, waveforms: Tensor, *, mask_indices: Tensor | None = None, attention_mask: Tensor | None = None
     ) -> tuple[Tensor, dict[str, Tensor]]:
         feats = self.feature_extractor(waveforms)
         feats = self.feature_projection(feats)
         x = feats.clone()
         x = self.projection_dropout(x)
-        if mask is not None:
+        if mask_indices is not None:
+            mask = mask_from_index(mask_indices, x.shape[1])
             x = torch.where(mask.unsqueeze(-1), self.mask_embedding.to(x.dtype).expand_as(x), x)
         else:
-            mask = torch.ones((x.shape[0], x.shape[1]), dtype=torch.bool, device=x.device)
-        mask_indices = torch.nonzero(mask, as_tuple=True)
+            mask_indices = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
         log_preds = [
-            self.heads[i](y[mask_indices])
+            self.heads[i](select_masked(y, mask_indices))
             for i, y in enumerate(self.student.get_intermediate_outputs(x, attention_mask)[-self.num_codebooks :])
         ]
 
         with torch.no_grad():
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
-            targets = [F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2)[mask_indices] for tl in targets]
+            targets = [
+                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_indices)
+                for tl in targets
+            ]
 
         onehot_targets = self.codebooks.quantize(targets)
         losses = torch.zeros(log_preds[0].shape[0], device=x.device)

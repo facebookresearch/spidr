@@ -25,7 +25,7 @@ def validate(model: DinoSR, loader: DataLoader, device: torch.device) -> dict[st
     for waveforms, attn_mask, mask in loader:
         loss, outputs = model(
             waveforms.to(device),
-            mask=mask.to(device),
+            mask_indices=mask.to(device),
             attention_mask=attn_mask.to(device) if attn_mask is not None else None,
         )
         total_loss += loss.mean()

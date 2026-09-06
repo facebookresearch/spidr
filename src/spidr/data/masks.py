@@ -78,7 +78,6 @@ def compute_mask_indices(
 ) -> Tensor:
     """Compute random mask spans for a given shape."""
     batch_size, frame = shape
-    mask = torch.full((batch_size, frame), fill_value=False)
     # add a random number for probabilistic rounding
     all_num_mask = int(mask_prob * frame / float(mask_length) + torch.rand(1, generator=generator))
     all_num_mask = max(min_masks, all_num_mask)
@@ -103,12 +102,12 @@ def compute_mask_indices(
         mask_idcs.append(torch.unique(mask_idc[mask_idc < sz]))
 
     min_len = min(len(m) for m in mask_idcs)
+    mask = torch.empty((batch_size, min_len), dtype=torch.int64)
     for i, mask_idc in enumerate(mask_idcs):
         if len(mask_idc) > min_len:
             idx = torch.randperm(len(mask_idc), generator=generator)[:min_len].long()
-            mask[i, mask_idc[idx]] = True
-        else:
-            mask[i, mask_idc] = True
+            mask_idc = mask_idc[idx].sort().values
+        mask[i] = mask_idc.long()
     return mask
 
 
@@ -145,7 +144,7 @@ class MaskGenerator(nn.Module):
         if self.config.mask_channel_prob > 0:
             if channels is None:
                 raise ValueError("Must set 'channels' to mask channel-wise")
-            mask_channel_indices = compute_mask_indices(
+            channel_indices = compute_mask_indices(
                 (batch, channels),
                 None,
                 self.config.mask_channel_prob,
@@ -157,7 +156,9 @@ class MaskGenerator(nn.Module):
                 no_overlap=self.config.no_mask_channel_overlap,
                 generator=generator,
             )
-            mask_channel_indices = mask_channel_indices.unsqueeze(1).expand(-1, time, -1)
+            # Channel masking is consumed as a boolean mask broadcast over time, not as positions.
+            channel_mask = torch.zeros((batch, channels), dtype=torch.bool).scatter_(1, channel_indices, value=True)
+            mask_channel_indices = channel_mask.unsqueeze(1).expand(-1, time, -1)
         else:
             mask_channel_indices = None
         return mask_indices, mask_channel_indices

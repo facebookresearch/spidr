@@ -4,13 +4,14 @@
 import copy
 from collections.abc import Iterable
 from functools import partial
+from typing import TypedDict
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
 from spidr.config import DinoSRConfig
-from spidr.models.components import Transformer, get_components
+from spidr.models.components import Transformer, get_components, mask_from_index, select_masked
 from spidr.models.metrics import perplexities
 
 
@@ -39,6 +40,28 @@ def init_teacher(
     return teacher, teacher_exclude_layers
 
 
+class EmaTargets(TypedDict):
+    lerp_teacher: list[Tensor]
+    lerp_student: list[Tensor]
+    copy_teacher: list[Tensor]
+    copy_student: list[Tensor]
+
+
+def _split_ema_targets(teacher: Transformer, student: Transformer, exclude_layers: set[str]) -> EmaTargets:
+    targets = EmaTargets(lerp_teacher=[], lerp_student=[], copy_teacher=[], copy_student=[])
+    for (name, teacher_param), student_param in zip(teacher.named_parameters(), student.parameters(), strict=True):
+        if name in exclude_layers:
+            targets["copy_teacher"].append(teacher_param)
+            targets["copy_student"].append(student_param)
+        else:
+            targets["lerp_teacher"].append(teacher_param)
+            targets["lerp_student"].append(student_param)
+    for teacher_buffer, student_buffer in zip(teacher.buffers(), student.buffers(), strict=True):
+        targets["copy_teacher"].append(teacher_buffer)
+        targets["copy_student"].append(student_buffer)
+    return targets
+
+
 class DinoSR(nn.Module):
     def __init__(self, cfg: DinoSRConfig | None = None) -> None:
         super().__init__()
@@ -60,7 +83,7 @@ class DinoSR(nn.Module):
         self.mask_embedding = nn.Parameter(torch.FloatTensor(cfg.encoder_embed_dim))
         nn.init.uniform_(self.mask_embedding)
         self.current_step = nn.Buffer(torch.zeros(1, dtype=torch.int64))
-        self._ema_decay = nn.Buffer(torch.zeros(()), persistent=False)
+        self._ema_targets = _split_ema_targets(self.teacher, self.student, self.teacher_exclude_layers)
 
     def train(self, mode: bool = True) -> "DinoSR":
         super().train(mode)
@@ -79,23 +102,17 @@ class DinoSR(nn.Module):
         self._extractor_frozen = True
 
     @torch.no_grad()
-    def _inner_ema(self, decay: torch.Tensor) -> None:
-        for (ema_n, ema_p), model_p in zip(self.teacher.named_parameters(), self.student.parameters(), strict=True):
-            if ema_n in self.teacher_exclude_layers:
-                ema_p.copy_(model_p)
-            else:
-                ema_p.lerp_(model_p, 1 - decay)
-        for ema_b, model_b in zip(self.teacher.buffers(), self.student.buffers(), strict=True):
-            ema_b.copy_(model_b)
-
     def update_ema(self, step: int) -> float:
         self.current_step.fill_(step)
         decay = self.ema_scheduler(step)
         if not self._extractor_frozen and step >= self.freeze_step:
             self.freeze_extractor()
         if 0.0 < decay < 1.0:
-            self._ema_decay.fill_(decay)
-            self._inner_ema(self._ema_decay)
+            targets = self._ema_targets
+            if targets["lerp_teacher"]:
+                torch._foreach_lerp_(targets["lerp_teacher"], targets["lerp_student"], 1 - decay)
+            if targets["copy_teacher"]:
+                torch._foreach_copy_(targets["copy_teacher"], targets["copy_student"])
         return decay
 
     def get_intermediate_outputs(self, waveforms: Tensor, *, attention_mask: Tensor | None = None) -> list[Tensor]:
@@ -122,23 +139,26 @@ class DinoSR(nn.Module):
         return codebooks
 
     def forward(
-        self, waveforms: Tensor, *, mask: Tensor | None = None, attention_mask: Tensor | None = None
+        self, waveforms: Tensor, *, mask_indices: Tensor | None = None, attention_mask: Tensor | None = None
     ) -> tuple[Tensor, dict[str, Tensor]]:
         feats = self.feature_extractor(waveforms)
         feats = self.feature_projection(feats)
         x = feats.clone()
         x = self.projection_dropout(x)
-        if mask is not None:
+        if mask_indices is not None:
+            mask = mask_from_index(mask_indices, x.shape[1])
             x = torch.where(mask.unsqueeze(-1), self.mask_embedding.to(x.dtype).expand_as(x), x)
         else:
-            mask = torch.ones((x.shape[0], x.shape[1]), dtype=torch.bool, device=x.device)
+            mask_indices = torch.arange(x.shape[1], device=x.device).expand(x.shape[0], -1)
         x = self.student(x, attention_mask)
-        mask_indices = torch.nonzero(mask, as_tuple=True)
-        x = x[mask_indices]
+        x = select_masked(x, mask_indices)
 
         with torch.no_grad():
             targets = self.teacher.get_intermediate_outputs(feats, attention_mask)[-self.num_codebooks :]
-            targets = [F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2)[mask_indices] for tl in targets]
+            targets = [
+                select_masked(F.instance_norm(tl.float().transpose(1, 2)).transpose(1, 2), mask_indices)
+                for tl in targets
+            ]
 
         onehot_targets = self.codebooks.quantize(targets)
         log_preds = [self.heads[i](x) for i in range(self.num_codebooks)]

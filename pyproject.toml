@@ -84,7 +84,7 @@ preview = true
 extend-ignore-names = ["F"]  # from torch.nn import functional as F
 
 [tool.ruff.lint.flake8-self]
-extend-ignore-names = ["_foreach_norm", "_appdirs", "_inductor", "_inner_ema"]
+extend-ignore-names = ["_foreach_norm", "_appdirs", "_inductor"]
 
 [tool.ruff.lint.pylint]
 max-args = 10

@@ -68,7 +68,7 @@ def test_round_trip_preserves_codebook_buffers(tiny_dinosr_config: DinoSRConfig,
     model, optimizer, scaler, scheduler = make_state(tiny_dinosr_config, seed=0)
     checkpointer = make_checkpointer(tmp_path, model, optimizer, scaler, scheduler)
     torch.manual_seed(0)
-    model.train()(torch.randn(2, 1600), mask=torch.ones(2, 78, dtype=torch.bool))
+    model.train()(torch.randn(2, 1600), mask_indices=torch.arange(78).expand(2, -1))
     assert checkpointer.save(10, 1)
 
     other_model, *other_state = make_state(tiny_dinosr_config, seed=1)

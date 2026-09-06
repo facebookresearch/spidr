@@ -111,4 +111,4 @@ def test_build_dataloader_yields_collated_batches(file_manifest: Path) -> None:
     assert waveforms.ndim == 2
     assert attn_mask is None  # enable_padding is off by default, so batches are cropped.
     assert mask.shape[0] == waveforms.shape[0]
-    assert mask.dtype == torch.bool
+    assert mask.dtype == torch.int64  # Masked positions, not a boolean mask.

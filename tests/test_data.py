@@ -103,7 +103,9 @@ def test_collator_without_padding_returns_no_attention_mask() -> None:
     assert attn_mask is None
     assert mask_indices is not None
     num_frames = int(conv_length(CONV_LAYER_CONFIG, torch.tensor([4_000]))[0])
-    assert mask_indices.shape == (3, num_frames)
+    assert mask_indices.shape[0] == 3
+    assert 0 < mask_indices.shape[1] <= num_frames
+    assert int(mask_indices.max()) < num_frames
 
 
 def test_collator_with_padding_returns_broadcastable_mask() -> None:
@@ -120,8 +122,27 @@ def test_collator_with_padding_returns_broadcastable_mask() -> None:
     for i, length in enumerate(lengths.tolist()):
         assert attn_mask[i, 0, 0, :length].all()
         assert not attn_mask[i, 0, 0, length:].any()
-    assert mask_indices.shape == (3, max_frames)
-    assert not (mask_indices & ~attn_mask[:, 0, 0, :]).any()  # No masking inside padding.
+    assert mask_indices.shape[0] == 3
+    mask = torch.zeros(3, max_frames, dtype=torch.bool).scatter_(1, mask_indices, value=True)
+    assert not (mask & ~attn_mask[:, 0, 0, :]).any()  # No masking inside padding.
+
+
+def test_mask_indices_is_rectangular_and_sorted() -> None:
+    """`spidr.models.components.select_masked` needs both properties.
+
+    Equal counts per row make the selection rectangular, and sorted positions make it reproduce the
+    row-major order that `torch.nonzero` used to hand back.
+    """
+    padding_mask = torch.zeros(4, 60, dtype=torch.bool)
+    padding_mask[1, 40:] = True  # A short row: fewer spans fit, so it sets the common count.
+    for no_mask_overlap in (False, True):
+        generate = MaskGenerator(MaskingConfig(no_mask_overlap=no_mask_overlap))
+        index = generate(padding_mask, generator=torch.Generator().manual_seed(0))[0]
+        assert index is not None
+        assert index.dtype == torch.int64
+        assert index.shape[0] == 4
+        assert (index.diff(dim=1) > 0).all()  # Strictly increasing: sorted and without duplicates.
+        assert int(index.max()) < 60
 
 
 def test_mask_generation_is_deterministic_with_generator() -> None:

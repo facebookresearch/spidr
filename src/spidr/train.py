@@ -92,7 +92,6 @@ def train(cfg: Config) -> None:
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
         if cfg.run.compile:
             model.compile(dynamic=True)
-            model._inner_ema = torch.compile(model._inner_ema)  # ty: ignore[invalid-assignment]
 
         def wrap_ddp() -> DistributedDataParallel:
             return DistributedDataParallel(
@@ -115,11 +114,11 @@ def train(cfg: Config) -> None:
                     break
                 waveforms = waveforms_cpu.to(device, non_blocking=True)
                 attn_mask = attn_mask_cpu.to(device, non_blocking=True) if attn_mask_cpu is not None else None
-                mask = mask_cpu.to(device, non_blocking=True)
-                num_frames = mask.sum()
+                mask_indices = mask_cpu.to(device, non_blocking=True)
+                num_frames = torch.full((), mask_indices.numel(), dtype=torch.int64, device=device)
                 num_frames_work = dist.all_reduce(num_frames, async_op=True)
                 with torch.autocast("cuda", dtype, cfg.optimizer.mixed_precision):
-                    loss, outputs = ddp_model(waveforms, mask=mask, attention_mask=attn_mask)
+                    loss, outputs = ddp_model(waveforms, mask_indices=mask_indices, attention_mask=attn_mask)
                 num_frames_work.wait()
                 loss = loss.sum() * world_size / num_frames
                 scaler.scale(loss).backward()
