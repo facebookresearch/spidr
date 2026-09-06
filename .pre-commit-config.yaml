@@ -28,4 +28,4 @@ repos:
   rev: v0.0.56
   hooks:
     - id: ty
-      args: [ --all-extras ]
+      args: [ --all-extras, --all-groups ]
