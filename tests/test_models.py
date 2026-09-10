@@ -3,7 +3,7 @@
 
 import dataclasses
 from collections.abc import Callable
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import torch
@@ -28,6 +28,13 @@ NUM_SAMPLES = 1600
 NUM_FRAMES = 78  # (1600 - 10) // 5 + 1 = 319 frames, then (319 - 8) // 4 + 1 = 78.
 NUM_MASKED = 15
 
+CONFIG_FIXTURES: dict[type[DinoSR], str] = {DinoSR: "tiny_dinosr_config", SpidR: "tiny_spidr_config"}
+
+
+def tiny_config(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> Any:
+    """The tiny configuration matching `model_cls`, whose exact class only the model itself knows."""
+    return request.getfixturevalue(CONFIG_FIXTURES[model_cls])
+
 
 def make_inputs() -> tuple[torch.Tensor, torch.Tensor]:
     torch.manual_seed(0)
@@ -38,7 +45,7 @@ def make_inputs() -> tuple[torch.Tensor, torch.Tensor]:
 
 @pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
 def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
-    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    cfg = tiny_config(model_cls, request)
     model = model_cls(cfg).train()
     waveforms, mask_indices = make_inputs()
     losses, outputs = model(waveforms, mask_indices=mask_indices, attention_mask=None)
@@ -50,7 +57,7 @@ def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureReques
     losses.mean().backward()
     assert all(p.grad is not None for p in model.student.parameters() if p.requires_grad)
     assert all(p.grad is None for p in model.teacher.parameters())
-    if model_cls is SpidR:
+    if issubclass(model_cls, SpidR):
         # The last post-norm layer's final_layer_norm is unreachable by the SpidR loss.
         final_layer_norm = cast("nn.Module", model.student.layers[-1].final_layer_norm)
         assert all(not p.requires_grad for p in final_layer_norm.parameters())
@@ -63,7 +70,7 @@ def test_every_trainable_parameter_receives_a_gradient(
     model_cls: type[DinoSR], request: pytest.FixtureRequest
 ) -> None:
     """Without layer drop there must be no unused parameters, or DDP needs find_unused_parameters."""
-    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    cfg = tiny_config(model_cls, request)
     model = model_cls(dataclasses.replace(cfg, encoder_layer_drop=0.0)).train()
     waveforms, mask_indices = make_inputs()
     model(waveforms, mask_indices=mask_indices)[0].mean().backward()
@@ -72,16 +79,16 @@ def test_every_trainable_parameter_receives_a_gradient(
 
 
 @pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
-def test_perplexities_are_scalars_the_meters_accept(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
-    """AverageMeter accumulates into a 0-dim tensor, so the metrics must be 0-dim too."""
-    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+def test_metrics_are_scalars_the_meters_accept(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
+    """AverageMeter accumulates into a 0-dim tensor, so every metric must be 0-dim too."""
+    cfg = tiny_config(model_cls, request)
     waveforms, mask_indices = make_inputs()
     _, outputs = model_cls(cfg).train()(waveforms, mask_indices=mask_indices)
-    assert outputs["target_ppl"].shape == ()
-    assert outputs["pred_ppl"].shape == ()
+    assert {"target_ppl", "pred_ppl"} <= set(outputs)
+    assert all(value.shape == () for value in outputs.values())
     meters = AverageMeters(["target_ppl", "pred_ppl"], device=torch.device("cpu"))
-    meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
-    assert set(meters.pop()) == {"target_ppl", "pred_ppl"}
+    meters.update(**outputs)  # The training loop feeds whatever the model reports to the meters.
+    assert set(meters.pop()) == set(outputs)
 
 
 @given(
@@ -161,7 +168,7 @@ def test_forward_does_not_sync_with_the_host(tiny_spidr_config: SpidRConfig) -> 
 @pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
 def test_forward_without_a_mask_predicts_every_frame(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """`mask_indices=None` selects every frame without substituting the mask embedding."""
-    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    cfg = tiny_config(model_cls, request)
     waveforms, _ = make_inputs()
     model = model_cls(cfg).eval()
     with torch.no_grad():
@@ -201,7 +208,7 @@ def test_update_ema_matches_the_per_parameter_reference(
 
     The schedules are shortened so the run covers the ramp, the hold, and the frozen tail.
     """
-    cfg = request.getfixturevalue("tiny_dinosr_config" if model_cls is DinoSR else "tiny_spidr_config")
+    cfg = tiny_config(model_cls, request)
     cfg = (
         dataclasses.replace(cfg, ema_final_step=6, freeze_step=11)
         if model_cls is DinoSR

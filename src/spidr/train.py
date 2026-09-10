@@ -134,8 +134,7 @@ def train(cfg: Config) -> None:
                 if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
                     remove_param_group(optimizer, scheduler, 1)
                     ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
-                meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm)
-                meters.update(target_ppl=outputs["target_ppl"], pred_ppl=outputs["pred_ppl"])
+                meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm, **outputs)
                 pbar.update()
                 if is_main and step % cfg.run.log_interval == 0:
                     infos = meters.pop() | {"lr": lr, "ema_decay": ema_decay * 1000, "step": step, "epoch": epoch}

@@ -31,6 +31,8 @@ class AverageMeters:
 
     def __init__(self, names: list[str], device: torch.device, *, dtype: torch.dtype = torch.float32) -> None:
         self.names = names
+        self.device = device
+        self.dtype = dtype
         self.meters = {name: AverageMeter(device, dtype) for name in names}
 
     def __getitem__(self, name: str) -> AverageMeter:
@@ -42,6 +44,8 @@ class AverageMeters:
 
     def update(self, **kwargs: torch.Tensor) -> None:
         for name, value in kwargs.items():
+            if name not in self.meters:
+                self.meters[name] = AverageMeter(self.device, self.dtype)
             self.meters[name].update(value)
 
     def pop(self) -> dict[str, float]:
