@@ -21,6 +21,7 @@ from spidr.models.components import (
     mask_from_index,
     select_masked,
 )
+from spidr.models.dinosr import _split_ema_targets
 from spidr.tools import AverageMeters
 
 BATCH_SIZE = 2
@@ -267,6 +268,27 @@ def test_update_ema_still_targets_the_teacher_after_load_state_dict(tiny_dinosr_
         not torch.equal(before, after)
         for before, after in zip(teacher_before, model.teacher.parameters(), strict=True)
     )
+
+
+def test_update_ema_still_targets_the_teacher_after_a_buffer_is_added(tiny_dinosr_config: DinoSRConfig) -> None:
+    """The encoder has no buffers today, and the cache would silently stale if one were added.
+
+    `Module._apply` rebinds buffers rather than writing through them, so a cache built before
+    `model.to(device)` would keep copying into the orphaned CPU tensors and the teacher's buffer
+    would never track the student's. Parameters survive because `_apply` swaps their `.data`.
+    """
+    model = DinoSR(tiny_dinosr_config).train()
+    for encoder in (model.student, model.teacher):
+        encoder.register_buffer("probe", torch.zeros(4))
+    model._ema_targets = _split_ema_targets(model.teacher, model.student, model.teacher_exclude_layers)
+    assert any(t is model.teacher.probe for t in model._ema_targets["copy_teacher"])
+
+    model.double()  # Any `_apply`: a real device move rebinds buffers the same way.
+    with torch.no_grad():
+        model.student.probe.fill_(1.0)
+    model.update_ema(step=1)
+
+    assert torch.equal(model.teacher.probe, model.student.probe), "teacher buffer was not synced"
 
 
 def test_ema_targets_stay_out_of_the_state_dict(tiny_dinosr_config: DinoSRConfig) -> None:

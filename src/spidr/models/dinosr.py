@@ -4,7 +4,7 @@
 import copy
 from collections.abc import Iterable
 from functools import partial
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import torch
 from torch import Tensor, nn
@@ -84,6 +84,11 @@ class DinoSR(nn.Module):
         nn.init.uniform_(self.mask_embedding)
         self.current_step = nn.Buffer(torch.zeros(1, dtype=torch.int64))
         self._ema_targets = _split_ema_targets(self.teacher, self.student, self.teacher_exclude_layers)
+
+    def _apply(self, *args: Any, **kwargs: Any) -> "DinoSR":
+        out = super()._apply(*args, **kwargs)
+        self._ema_targets = _split_ema_targets(self.teacher, self.student, self.teacher_exclude_layers)
+        return out
 
     def train(self, mode: bool = True) -> "DinoSR":
         super().train(mode)
