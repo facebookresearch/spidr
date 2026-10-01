@@ -147,6 +147,12 @@ def isolated_compile_cache(compiled: bool) -> Iterator[None]:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for pretraining precision coverage")
+# Triton constructs ast.AnnAssign without `simple`, deprecated in Python 3.14.
+# Keep this upstream compiler warning from failing otherwise valid CUDA graphs.
+@pytest.mark.filterwarnings(
+    r"ignore:AnnAssign\.__init__ missing 1 required positional argument. 'simple'\."
+    r":DeprecationWarning:triton\.compiler\.code_generator"
+)
 @pytest.mark.parametrize("mode", ["layer_norm", "group_norm"])
 @pytest.mark.parametrize("bias", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
