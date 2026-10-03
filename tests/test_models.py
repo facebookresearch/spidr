@@ -281,14 +281,16 @@ def test_update_ema_still_targets_the_teacher_after_a_buffer_is_added(tiny_dinos
     for encoder in (model.student, model.teacher):
         encoder.register_buffer("probe", torch.zeros(4))
     model._ema_targets = _split_ema_targets(model.teacher, model.student, model.teacher_exclude_layers)
-    assert any(t is model.teacher.probe for t in model._ema_targets["copy_teacher"])
+    assert any(t is model.teacher.get_buffer("probe") for t in model._ema_targets["copy_teacher"])
 
     model.double()  # Any `_apply`: a real device move rebinds buffers the same way.
     with torch.no_grad():
-        model.student.probe.fill_(1.0)
+        model.student.get_buffer("probe").fill_(1.0)
     model.update_ema(step=1)
 
-    assert torch.equal(model.teacher.probe, model.student.probe), "teacher buffer was not synced"
+    assert torch.equal(model.teacher.get_buffer("probe"), model.student.get_buffer("probe")), (
+        "teacher buffer was not synced"
+    )
 
 
 def test_ema_targets_stay_out_of_the_state_dict(tiny_dinosr_config: DinoSRConfig) -> None:

@@ -28,12 +28,11 @@ def select_masked(x: Tensor, index: Tensor) -> Tensor:
 
 
 class LayerNorm(nn.LayerNorm):
-    """Layer norm with transpose."""
+    """Layer norm over the channel dimension of `(batch, channel, *)`."""
 
     def forward(self, input: Tensor) -> Tensor:
-        x = input.transpose(-2, -1)
-        x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
-        return x.transpose(-2, -1)
+        x = F.layer_norm(input.movedim(1, -1), self.normalized_shape, self.weight, self.bias, self.eps)
+        return x.movedim(-1, 1)
 
 
 class ConvLayerBlock(nn.Module):
@@ -60,7 +59,11 @@ class ConvLayerBlock(nn.Module):
         nn.init.kaiming_normal_(self.conv.weight)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.conv(x)
+        if x.dim() == 4:  # Channels-last (batch, channel, 1, frame): run as a 2D convolution with height 1.
+            weight = self.conv.weight.unsqueeze(2).to(memory_format=torch.channels_last)
+            x = F.conv2d(x, weight, self.conv.bias, stride=(1, self.stride))
+        else:
+            x = self.conv(x)
         if self.layer_norm is not None:
             x = self.layer_norm(x)
         return F.gelu(x)
@@ -69,11 +72,17 @@ class ConvLayerBlock(nn.Module):
 class FeatureExtractor(nn.Module):
     """Extract features from audio."""
 
-    def __init__(self, conv_layers: nn.ModuleList) -> None:
+    def __init__(self, conv_layers: nn.ModuleList, *, channels_last: bool = False) -> None:
         super().__init__()
         self.conv_layers = conv_layers
+        self.channels_last = channels_last
 
     def forward(self, x: Tensor) -> Tensor:
+        if self.channels_last:
+            x = x[:, None, None, :].to(memory_format=torch.channels_last)  # (batch, 1, 1, sample)
+            for layer in self.conv_layers:
+                x = layer(x)  # (batch, feature, 1, frame)
+            return x.squeeze(2).transpose(1, 2)  # (batch, frame, feature)
         x = x.unsqueeze(1)  # (batch, channel==1, frame)
         for layer in self.conv_layers:
             x = layer(x)  # (batch, feature, frame)
@@ -331,9 +340,7 @@ class Codebooks(nn.ModuleList):
         return onehot_targets
 
 
-def get_components(
-    cfg: DinoSRConfig,
-) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, Codebooks]:
+def get_feature_extractor(cfg: DinoSRConfig) -> FeatureExtractor:
     if cfg.extractor_mode not in {"group_norm", "layer_norm"}:
         raise ValueError(cfg.extractor_mode)
     blocks = nn.ModuleList()
@@ -348,8 +355,13 @@ def get_components(
             ConvLayerBlock(in_channels, out_channels, kernel_size, stride, layer_norm, bias=cfg.extractor_conv_bias)
         )
         in_channels = out_channels
-    feature_extractor = FeatureExtractor(blocks)
+    return FeatureExtractor(blocks, channels_last=cfg.extractor_mode == "layer_norm")
 
+
+def get_components(
+    cfg: DinoSRConfig,
+) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, Codebooks]:
+    feature_extractor = get_feature_extractor(cfg)
     feature_projection = FeatureProjection(cfg.extractor_conv_layer_config[-1][0], cfg.encoder_embed_dim)
     pos_conv = ConvPositionalEmbedding(
         cfg.encoder_embed_dim, cfg.encoder_pos_conv_kernel, cfg.encoder_pos_conv_groups, cfg.encoder_pos_conv_depth

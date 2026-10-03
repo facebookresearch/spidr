@@ -64,7 +64,9 @@ packages = ["src/spidr"]
 source = "vcs"
 
 [tool.pytest]
+addopts = ["-m", "not compile"]
 filterwarnings = ["error"]
+markers = ["compile: torch.compile tests, deselected by default; run with -m compile"]
 
 [tool.ruff]
 line-length = 119
