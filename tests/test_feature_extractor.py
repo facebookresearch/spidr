@@ -11,10 +11,11 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from spidr.config import DinoSRConfig
-from spidr.models.components import FeatureExtractor, LayerNorm, get_components
+from spidr.models.components import ConvLayerBlock, FeatureExtractor, LayerNorm, get_feature_extractor
 
-NUM_SAMPLES = 16000
-NUM_FRAMES = 49
+# Short input: half-precision convolutions use slow fallback kernels on CPU.
+NUM_SAMPLES = 4000
+NUM_FRAMES = 12
 NUM_FEATURES = 512
 
 
@@ -22,6 +23,7 @@ def reference_forward(extractor: FeatureExtractor, x: Tensor) -> Tensor:
     """Original implementation: Conv1d in (batch, channel, frame) layout."""
     x = x.unsqueeze(1)
     for layer in extractor.conv_layers:
+        assert isinstance(layer, ConvLayerBlock)
         x = layer.conv(x)
         if isinstance(layer.layer_norm, LayerNorm):
             norm = layer.layer_norm
@@ -35,7 +37,7 @@ def reference_forward(extractor: FeatureExtractor, x: Tensor) -> Tensor:
 
 def make_extractor(mode: str, *, bias: bool, dtype: torch.dtype) -> FeatureExtractor:
     cfg = dataclasses.replace(DinoSRConfig(), extractor_mode=mode, extractor_conv_bias=bias)
-    extractor = get_components(cfg)[0]
+    extractor = get_feature_extractor(cfg)
     for module in extractor.modules():  # Non-trivial affine parameters.
         if isinstance(module, (LayerNorm, nn.GroupNorm)):
             nn.init.normal_(module.weight, 1.0, 0.1)
@@ -59,11 +61,14 @@ def output_and_grads(
         out = forward(extractor, x)
     assert out.shape == grad_output.shape
     expected_dtype = autocast_dtype or x.dtype
-    if autocast_dtype is not None and x.device.type == "cuda":
-        # CUDA autocast runs normalization in FP32. In layer_norm mode the final
-        # block ends in normalization + GELU; group_norm mode ends in a convolution.
-        if isinstance(extractor.conv_layers[-1].layer_norm, (LayerNorm, nn.GroupNorm)):
-            expected_dtype = torch.float32
+    # CUDA autocast runs normalization in FP32. In layer_norm mode the final
+    # block ends in normalization + GELU; group_norm mode ends in a convolution.
+    if (
+        autocast_dtype is not None
+        and x.device.type == "cuda"
+        and isinstance(extractor.conv_layers[-1].layer_norm, (LayerNorm, nn.GroupNorm))
+    ):
+        expected_dtype = torch.float32
     assert out.dtype == expected_dtype
     names, params = zip(*extractor.named_parameters(), strict=True)
     grads = torch.autograd.grad(out, [x, *params], grad_output)
@@ -110,10 +115,10 @@ def assert_numerically_close(
         torch.bfloat16: (1e-1, 4e-2),
     }[dtype]
     assert actual.keys() == expected.keys()
-    for name in expected:
-        a, e = actual[name].double(), expected[name].double()
+    for name, value in expected.items():
+        a, e = actual[name].double(), value.double()
         assert a.shape == e.shape, name
-        assert actual[name].dtype == expected[name].dtype, name
+        assert actual[name].dtype == value.dtype, name
         assert torch.isfinite(a).all(), name
         assert torch.isfinite(e).all(), name
         if mode == "group_norm" and name == "conv_layers.0.conv.bias":
@@ -156,7 +161,7 @@ def isolated_compile_cache(compiled: bool) -> Iterator[None]:
 @pytest.mark.parametrize("mode", ["layer_norm", "group_norm"])
 @pytest.mark.parametrize("bias", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("compiled", [False, True], ids=["eager", "compiled"])
+@pytest.mark.parametrize("compiled", [False, pytest.param(True, marks=pytest.mark.compile)], ids=["eager", "compiled"])
 @pytest.mark.usefixtures("isolated_compile_cache")
 def test_feature_extractor_cuda_pretraining(
     mode: str, bias: bool, dtype: torch.dtype, compiled: bool, monkeypatch: pytest.MonkeyPatch
@@ -185,6 +190,7 @@ def test_feature_extractor_cuda_pretraining(
     for batch, samples in [(2, 8000), (3, 16000), (2, 12080)]:
         frames = samples
         for layer in extractor.conv_layers:
+            assert isinstance(layer, ConvLayerBlock)
             frames = (frames - layer.kernel_size) // layer.stride + 1
         x = torch.randn(batch, samples, device="cuda", dtype=torch.float32)
         upstream = torch.randn(batch, frames, NUM_FEATURES, device="cuda", dtype=dtype)
@@ -202,7 +208,7 @@ def test_feature_extractor_cuda_pretraining(
 def test_conv1d_checkpoint_resumes_channels_last(tiny_dinosr_config: DinoSRConfig, tmp_path: Path) -> None:
     """Old Conv1d weights and populated AdamW moments resume through the new forward path."""
     torch.manual_seed(0)
-    original = get_components(tiny_dinosr_config)[0].double()
+    original = get_feature_extractor(tiny_dinosr_config).double()
     original.channels_last = False
     optimizer = torch.optim.AdamW(original.parameters(), lr=1e-3)
     x = torch.randn(2, 1600, dtype=torch.float64)
@@ -215,7 +221,7 @@ def test_conv1d_checkpoint_resumes_channels_last(tiny_dinosr_config: DinoSRConfi
     step(original, optimizer)
     path = tmp_path / "conv1d.pt"
     torch.save({"model": original.state_dict(), "optimizer": optimizer.state_dict()}, path)
-    resumed = get_components(tiny_dinosr_config)[0].double()
+    resumed = get_feature_extractor(tiny_dinosr_config).double()
     assert resumed.channels_last
     resumed_optimizer = torch.optim.AdamW(resumed.parameters(), lr=1e-3)
     checkpoint = torch.load(path, weights_only=True)

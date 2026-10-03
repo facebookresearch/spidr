@@ -340,9 +340,7 @@ class Codebooks(nn.ModuleList):
         return onehot_targets
 
 
-def get_components(
-    cfg: DinoSRConfig,
-) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, Codebooks]:
+def get_feature_extractor(cfg: DinoSRConfig) -> FeatureExtractor:
     if cfg.extractor_mode not in {"group_norm", "layer_norm"}:
         raise ValueError(cfg.extractor_mode)
     blocks = nn.ModuleList()
@@ -357,8 +355,13 @@ def get_components(
             ConvLayerBlock(in_channels, out_channels, kernel_size, stride, layer_norm, bias=cfg.extractor_conv_bias)
         )
         in_channels = out_channels
-    feature_extractor = FeatureExtractor(blocks, channels_last=cfg.extractor_mode == "layer_norm")
+    return FeatureExtractor(blocks, channels_last=cfg.extractor_mode == "layer_norm")
 
+
+def get_components(
+    cfg: DinoSRConfig,
+) -> tuple[FeatureExtractor, FeatureProjection, Transformer, nn.ModuleList, Codebooks]:
+    feature_extractor = get_feature_extractor(cfg)
     feature_projection = FeatureProjection(cfg.extractor_conv_layer_config[-1][0], cfg.encoder_embed_dim)
     pos_conv = ConvPositionalEmbedding(
         cfg.encoder_embed_dim, cfg.encoder_pos_conv_kernel, cfg.encoder_pos_conv_groups, cfg.encoder_pos_conv_depth

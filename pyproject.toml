@@ -65,6 +65,8 @@ source = "vcs"
 
 [tool.pytest]
 filterwarnings = ["error"]
+addopts = ["-m", "not compile"]
+markers = ["compile: torch.compile tests, deselected by default; run with -m compile"]
 
 [tool.ruff]
 line-length = 119
