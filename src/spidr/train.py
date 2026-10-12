@@ -78,6 +78,7 @@ def train(cfg: Config) -> None:
 
         logger.info("Building model, optimizer, and dataloaders")
         device = torch.device(f"cuda:{os.environ['LOCAL_RANK']}")
+        torch.cuda.set_device(device)
         dtype = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}[cfg.optimizer.dtype]
         model = build_model(cfg=cfg.model, model_type=cfg.run.model_type, checkpoint=cfg.run.init_ckpt)
         model = model.to(device).train()
