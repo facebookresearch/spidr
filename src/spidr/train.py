@@ -132,6 +132,8 @@ def train(cfg: Config) -> None:
                 scheduler.step()
                 step += 1
                 ema_decay = model.update_ema(step)
+                if step == cfg.model.freeze_step and cfg.run.compile:
+                    torch.compiler.reset()
                 if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
                     remove_param_group(optimizer, scheduler, 1)
                     ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
