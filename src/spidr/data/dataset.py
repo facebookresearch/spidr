@@ -231,8 +231,7 @@ class SpeechDatasetFromFiles(SpeechDataset):
 
 
 def speech_dataset(manifest_path: Path | str, *, normalize: bool) -> SpeechDataset:
-    with Path(manifest_path).open("r", encoding="utf-8") as f:
-        columns = set(f.readline().strip().split(","))
+    columns = set(read_manifest(manifest_path).columns)
     if {"fileid", "path", "num_samples", "archive", "byte_offset", "byte_size"}.issubset(columns):
         return SpeechDatasetFromArchive(manifest_path, normalize=normalize)
     return SpeechDatasetFromFiles(manifest_path, normalize=normalize)
