@@ -237,3 +237,20 @@ def test_conv1d_checkpoint_resumes_channels_last(tiny_dinosr_config: DinoSRConfi
         torch.testing.assert_close(old_param, new_param, rtol=1e-9, atol=1e-10)
         for key, value in optimizer.state[old_param].items():
             torch.testing.assert_close(value, resumed_optimizer.state[new_param][key], rtol=1e-9, atol=1e-10)
+
+
+@pytest.mark.parametrize("mode", ["layer_norm", "group_norm"])
+@pytest.mark.parametrize("channels_last", [True, False])
+def test_weight_grads_match_parameter_strides(mode: str, *, channels_last: bool) -> None:
+    """DDP copies each grad into a bucket view laid out like its parameter, and warns if strides differ.
+
+    The check is strict even on size-1 dims, which the channels-last path used to trip on the first conv."""
+    extractor = make_extractor(mode, bias=False, dtype=torch.float32)
+    extractor.channels_last = channels_last
+    extractor(torch.randn(2, NUM_SAMPLES)).square().mean().backward()
+    mismatched = {
+        name: (param.stride(), param.grad.stride())
+        for name, param in extractor.named_parameters()
+        if param.grad is not None and param.grad.stride() != param.stride()
+    }
+    assert not mismatched

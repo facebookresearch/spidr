@@ -54,6 +54,10 @@ class ConvLayerBlock(nn.Module):
         self.layer_norm = layer_norm
         self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride, bias=bias)
         self.init_weights()
+        if in_channels == 1:
+            # The weight gradient gets a non-standard stride on its input-channel dimension in this case.
+            # DDP sees this as a layout mismatch with the parameter (and warns only once), so force contiguous strides.
+            self.conv.weight.register_hook(lambda grad: grad.clone(memory_format=torch.contiguous_format))
 
     def init_weights(self) -> None:
         nn.init.kaiming_normal_(self.conv.weight)
