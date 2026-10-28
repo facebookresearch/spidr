@@ -5,7 +5,7 @@ import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict, get_args
 
 SAMPLE_RATE: int = 16_000
 DEFAULT_CONV_LAYER_CONFIG: list[tuple[int, int, int]] = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512, 2, 2)] * 2
@@ -68,7 +68,6 @@ class DataConfig:
     persistent_workers: bool = True
     random_seed: int = 0
     bucket_method: Literal["uniform", "percentile"] = "uniform"
-    alignments_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +143,16 @@ class SpidRConfig(DinoSRConfig):
     encoder_layer_drop: float = 0.0  # model.encoder_layerdrop
 
 
+def model_config_class(model_type: ModelType) -> type[DinoSRConfig]:
+    configs: dict[ModelType, type[DinoSRConfig]] = {
+        "dinosr": DinoSRConfig,
+        "spidr": SpidRConfig,
+    }
+    if model_type not in configs:
+        raise ValueError(f"Unknown model type {model_type!r}, expected one of {get_args(ModelType)}.")
+    return configs[model_type]
+
+
 @dataclass(frozen=True)
 class MaskingConfig:
     """Masking configuration. Corresponding names in `fairseq` in comments."""
@@ -173,7 +182,7 @@ class Config:
 
     run: RunConfig
     data: DataConfig
-    model: DinoSRConfig | SpidRConfig
+    model: DinoSRConfig
     optimizer: OptimizerConfig
     masking: MaskingConfig
     validation: dict[str, DataConfig]
@@ -197,7 +206,7 @@ def read_config(path: str | Path) -> Config:
     return Config(
         run=run,
         data=DataConfig(**data["data"]),
-        model=(DinoSRConfig if run.model_type == "dinosr" else SpidRConfig)(**data.get("model", {})),
+        model=model_config_class(run.model_type)(**data.get("model", {})),
         optimizer=OptimizerConfig(**data.get("optimizer", {})),
         masking=MaskingConfig(**data.get("masking", {})),
         validation={k: DataConfig(**v) for k, v in data["validation"].items()} if "validation" in data else {},

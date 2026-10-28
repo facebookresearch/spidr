@@ -2,7 +2,6 @@
 """Model loading utilities."""
 
 import json
-import typing as tp
 import warnings
 from collections import OrderedDict
 from itertools import product
@@ -13,56 +12,46 @@ import torch
 from torch.hub import load_state_dict_from_url
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 
-from spidr.config import DinoSRConfig, ModelType, SpidRConfig
+from spidr.config import DinoSRConfig, ModelType, SpidRConfig, model_config_class
 from spidr.models.dinosr import DinoSR
 from spidr.models.spidr import SpidR
 
 
-def model_from_raw_checkpoint(
-    model_class: type[SpidR] | type[DinoSR],
-    config_class: type[DinoSRConfig] | type[SpidRConfig],
-    ckpt: str | Path,
-) -> DinoSR | SpidR:
-    path = Path(ckpt)
-    if path.suffix != ".pt":
-        raise ValueError("Only .pt files are supported.")
-    if (path.parent / "config.json").is_file():
-        with (path.parent / "config.json").open() as f:
-            json_cfg = json.load(f)
-            if "model" in json_cfg:
-                json_cfg = json_cfg["model"]
-            cfg = config_class(**json_cfg)
-    else:
-        warnings.warn("Config file not found when loading checkpoint. Using default config.", stacklevel=2)
-        cfg = config_class()
-    instance = model_class(cfg)
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
-    if "model" in state_dict:
-        state_dict = state_dict["model"]
-    consume_prefix_in_state_dict_if_present(state_dict, "module.")
-    instance.load_state_dict(state_dict)
-    return instance
+def model_class(cfg: DinoSRConfig) -> type[DinoSR]:
+    models: dict[type[DinoSRConfig], type[DinoSR]] = {
+        DinoSRConfig: DinoSR,
+        SpidRConfig: SpidR,
+    }
+    if type(cfg) not in models:
+        names = [config.__name__ for config in models]
+        raise ValueError(f"Unknown model config class {type(cfg).__name__}, expected one of {names}.")
+    return models[type(cfg)]
 
 
 def build_model(
     *,
-    cfg: DinoSRConfig | SpidRConfig | None = None,
+    cfg: DinoSRConfig | None = None,
     model_type: ModelType | None = None,
     checkpoint: str | Path | None = None,
-) -> DinoSR | SpidR:
+) -> DinoSR:
+    """Build a model from `cfg`, or from the config.json next to `checkpoint`, and load the checkpoint weights."""
+    if cfg is None:
+        if checkpoint is None or model_type is None:
+            raise ValueError("Either `cfg`, or both `model_type` and `checkpoint`, must be given.")
+        config_path = Path(checkpoint).parent / "config.json"
+        if config_path.is_file():
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            cfg = model_config_class(model_type)(**data.get("model", data))
+        else:
+            warnings.warn("Config file not found when loading checkpoint. Using default config.", stacklevel=2)
+            cfg = model_config_class(model_type)()
+    model = model_class(cfg)(cfg)
     if checkpoint is not None:
-        match model_type:
-            case "dinosr":
-                return model_from_raw_checkpoint(DinoSR, DinoSRConfig, checkpoint)
-            case "spidr":
-                return model_from_raw_checkpoint(SpidR, SpidRConfig, checkpoint)
-            case _:
-                raise ValueError(f"Model type not recognized, acceptable models are {tp.get_args(ModelType)}.")
-    if isinstance(cfg, SpidRConfig):
-        return SpidR(cfg)
-    if isinstance(cfg, DinoSRConfig):  # Must be last condition because SpidRConfig is subclass of DinoSRConfig
-        return DinoSR(cfg)
-    raise ValueError("Invalid cfg class")
+        state_dict = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        state_dict = state_dict.get("model", state_dict)
+        consume_prefix_in_state_dict_if_present(state_dict, "module.")
+        model.load_state_dict(state_dict)
+    return model
 
 
 def state_dict_from_dinosr_fairseq_checkpoint(checkpoint: dict[str, Any]) -> OrderedDict[str, torch.Tensor]:

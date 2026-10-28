@@ -2,8 +2,10 @@
 """Tests for DinoSR and SpidR: forward, backward, EMA, codebook updates and layer drop."""
 
 import dataclasses
+import json
 from collections.abc import Callable
-from typing import Any, cast
+from pathlib import Path
+from typing import Any, cast, get_args
 
 import pytest
 import torch
@@ -11,8 +13,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from torch import nn
 
-from spidr.config import DinoSRConfig, SpidRConfig
-from spidr.models import DinoSR, SpidR
+from spidr.config import DinoSRConfig, ModelType, SpidRConfig, model_config_class
+from spidr.models import DinoSR, SpidR, build_model
 from spidr.models.components import (
     Codebook,
     Codebooks,
@@ -22,6 +24,7 @@ from spidr.models.components import (
     select_masked,
 )
 from spidr.models.dinosr import _split_ema_targets
+from spidr.models.utils import model_class
 from spidr.tools import AverageMeters
 
 BATCH_SIZE = 2
@@ -29,7 +32,11 @@ NUM_SAMPLES = 1600
 NUM_FRAMES = 78  # (1600 - 10) // 5 + 1 = 319 frames, then (319 - 8) // 4 + 1 = 78.
 NUM_MASKED = 15
 
-CONFIG_FIXTURES: dict[type[DinoSR], str] = {DinoSR: "tiny_dinosr_config", SpidR: "tiny_spidr_config"}
+CONFIG_FIXTURES: dict[type[DinoSR], str] = {
+    DinoSR: "tiny_dinosr_config",
+    SpidR: "tiny_spidr_config",
+}
+MODEL_CLASSES = list(CONFIG_FIXTURES)
 
 
 def tiny_config(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> Any:
@@ -44,7 +51,7 @@ def make_inputs() -> tuple[torch.Tensor, torch.Tensor]:
     return waveforms, mask_indices
 
 
-@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
 def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     cfg = tiny_config(model_cls, request)
     model = model_cls(cfg).train()
@@ -67,7 +74,7 @@ def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureReques
 
 
 @pytest.mark.parametrize("layer_drop", [0.0, 1.0])
-@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
 def test_every_trainable_parameter_receives_a_gradient(
     model_cls: type[DinoSR], layer_drop: float, request: pytest.FixtureRequest
 ) -> None:
@@ -80,7 +87,7 @@ def test_every_trainable_parameter_receives_a_gradient(
     assert without_grad == []
 
 
-@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
 def test_metrics_are_scalars_the_meters_accept(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """AverageMeter accumulates into a 0-dim tensor, so every metric must be 0-dim too."""
     cfg = tiny_config(model_cls, request)
@@ -148,14 +155,15 @@ class RecordTorchOps(torch.overrides.TorchFunctionMode):
         return func(*args, **(kwargs or {}))  # ty: ignore[call-non-callable]
 
 
-def test_forward_does_not_sync_with_the_host(tiny_spidr_config: SpidRConfig) -> None:
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
+def test_forward_does_not_sync_with_the_host(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """The masked frames come from precomputed positions, so `torch.nonzero` no longer syncs here.
 
     The output is compared against eager too, to catch a rewrite that traces cleanly but selects the
     wrong frames.
     """
     waveforms, mask_indices = make_inputs()
-    model = SpidR(tiny_spidr_config).eval()
+    model = model_cls(tiny_config(model_cls, request)).eval()
     with torch.no_grad():
         expected = model(waveforms, mask_indices=mask_indices)[0]
         targets, actual = capture_dynamo_graphs(model, waveforms, mask_indices=mask_indices)
@@ -167,7 +175,7 @@ def test_forward_does_not_sync_with_the_host(tiny_spidr_config: SpidRConfig) -> 
     torch.testing.assert_close(cast("tuple[torch.Tensor, ...]", actual)[0], expected)
 
 
-@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
 def test_forward_without_a_mask_predicts_every_frame(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """`mask_indices=None` selects every frame without substituting the mask embedding."""
     cfg = tiny_config(model_cls, request)
@@ -202,7 +210,7 @@ def jitter_student(model: DinoSR, generator: torch.Generator) -> None:
             param.add_(torch.randn(param.shape, generator=generator) * 0.01)
 
 
-@pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
+@pytest.mark.parametrize("model_cls", MODEL_CLASSES)
 def test_update_ema_matches_the_per_parameter_reference(
     model_cls: type[DinoSR], request: pytest.FixtureRequest
 ) -> None:
@@ -347,6 +355,54 @@ def test_codebooks_update_in_train_but_not_eval(tiny_spidr_config: SpidRConfig) 
     with torch.no_grad():
         model(waveforms, mask_indices=mask_indices)
     assert all(torch.equal(b, c.codebook) for b, c in zip(before, model.codebooks, strict=True))
+
+
+def test_every_model_type_has_a_model_class_and_a_tiny_config() -> None:
+    """Adding a model type without registering its model, or without a tiny config for the tests above, must fail."""
+    models = {model_class(model_config_class(model_type)()) for model_type in get_args(ModelType)}
+    assert models == set(CONFIG_FIXTURES)
+
+
+def test_model_class_rejects_unknown_config_class() -> None:
+    @dataclasses.dataclass(frozen=True)
+    class UnknownConfig(DinoSRConfig):
+        pass
+
+    with pytest.raises(ValueError, match="Unknown model config class UnknownConfig, expected one of"):
+        model_class(UnknownConfig())
+
+
+def test_build_model_from_checkpoint_reads_the_config_next_to_it(
+    tiny_spidr_config: SpidRConfig,
+    tmp_path: Path,
+) -> None:
+    """Without `cfg`, the model config comes from the `config.json` written by training next to the checkpoint."""
+    cfg = dataclasses.replace(tiny_spidr_config, freeze_step=123)
+    source = SpidR(cfg)
+    torch.save({"model": source.state_dict()}, tmp_path / "ckpt.pt")
+    (tmp_path / "config.json").write_text(json.dumps({"model": dataclasses.asdict(cfg)}))
+    model = cast("SpidR", build_model(model_type="spidr", checkpoint=tmp_path / "ckpt.pt"))
+    assert type(model) is SpidR
+    assert model.freeze_step == 123
+    for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
+        torch.testing.assert_close(expected, actual)
+
+
+def test_build_model_requires_cfg_or_checkpoint_and_model_type() -> None:
+    with pytest.raises(ValueError, match="Either `cfg`, or both `model_type` and `checkpoint`"):
+        build_model(model_type="spidr")
+
+
+def test_build_model_with_cfg_and_checkpoint_keeps_the_cfg(tiny_spidr_config: SpidRConfig, tmp_path: Path) -> None:
+    """`run.init_ckpt` only brings weights: the `config.json` next to the checkpoint must not override `cfg.model`."""
+    source = SpidR(tiny_spidr_config)
+    torch.save({"model": source.state_dict()}, tmp_path / "init.pt")
+    (tmp_path / "config.json").write_text(json.dumps({"model": dataclasses.asdict(tiny_spidr_config)}))
+    cfg = dataclasses.replace(tiny_spidr_config, freeze_step=123)
+    model = cast("SpidR", build_model(cfg=cfg, checkpoint=tmp_path / "init.pt"))
+    assert model.freeze_step == 123
+    for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
+        torch.testing.assert_close(expected, actual)
 
 
 def test_codebook_state_dict_keys_are_stable(tiny_spidr_config: SpidRConfig) -> None:

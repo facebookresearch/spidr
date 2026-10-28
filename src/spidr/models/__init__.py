@@ -5,4 +5,11 @@ from spidr.models.dinosr import DinoSR
 from spidr.models.spidr import SpidR
 from spidr.models.utils import build_model, dinosr_base_original, dinosr_base_reproduced, spidr_base
 
-__all__ = ["DinoSR", "SpidR", "build_model", "dinosr_base_original", "dinosr_base_reproduced", "spidr_base"]
+__all__ = [
+    "DinoSR",
+    "SpidR",
+    "build_model",
+    "dinosr_base_original",
+    "dinosr_base_reproduced",
+    "spidr_base",
+]

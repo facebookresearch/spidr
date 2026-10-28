@@ -2,12 +2,16 @@
 """Tests for configuration parsing."""
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from spidr.config import (
+    DinoSRConfig,
     MaskingConfig,
+    ModelType,
     SpidRConfig,
+    model_config_class,
     read_config,
 )
 
@@ -18,6 +22,17 @@ def test_masking_config_rejects_probabilities_outside_unit_interval(prob: float)
         MaskingConfig(mask_prob=prob)
     with pytest.raises(ValueError, match="mask_channel_prob must be in"):
         MaskingConfig(mask_channel_prob=prob)
+
+
+@pytest.mark.parametrize("model_type", get_args(ModelType))
+def test_every_model_type_has_a_config_class(model_type: ModelType) -> None:
+    """Adding a name to `ModelType` without registering its config must fail here, not at training time."""
+    assert issubclass(model_config_class(model_type), DinoSRConfig)
+
+
+def test_model_config_class_rejects_unknown_model_type() -> None:
+    with pytest.raises(ValueError, match="Unknown model type 'wav2vec2', expected one of"):
+        model_config_class("wav2vec2")  # ty: ignore[invalid-argument-type]
 
 
 def test_read_example_config() -> None:
