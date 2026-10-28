@@ -33,22 +33,14 @@ def copy_code_to_submitit_folder(output_dir: Path) -> None:
     logger.info("Copying: %s to: %s", root, output_dir)
     rsync_cmd = [
         "rsync",
-        "-ar",
+        "-a",
         "--copy-links",
-        "--exclude=.git/",
-        "--exclude=./data/",
-        "--exclude=./paper/",
-        "--exclude=__pycache__",
-        "--exclude=*.pyc",
-        "--exclude=*.ipynb",
-        "--exclude=*.err",
-        "--exclude=*.out",
-        "--exclude=*.log",
-        "--exclude=*.pt",
-        "--exclude=.ruff_cache/",
-        "--exclude=.mypy_cache/",
-        f"{root}/",
-        str(output_dir),
+        "--prune-empty-dirs",
+        "--include=*/",
+        "--include=*.py",
+        "--exclude=*",
+        f"{root}/src/",
+        str(output_dir / "src"),
     ]
     subprocess.call(rsync_cmd)
     logger.info("Copy done.")

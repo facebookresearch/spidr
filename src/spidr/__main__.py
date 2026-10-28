@@ -35,4 +35,4 @@ if __name__ == "__main__":
     init_logger()
     jobs = [(train, (read_config(cfg),)) for cfg in args.configs]
     name = jobs[0][1][0].run.wandb_name
-    launch_with_submitit(name, jobs, args.dump, slurm_config_parse_args(args))
+    launch_with_submitit(name, jobs, args.dump, slurm_config_parse_args(args), copy_code=True)

@@ -66,13 +66,14 @@ def test_forward_backward(model_cls: type[DinoSR], request: pytest.FixtureReques
         assert all(p.requires_grad for p in model.student.parameters())
 
 
+@pytest.mark.parametrize("layer_drop", [0.0, 1.0])
 @pytest.mark.parametrize("model_cls", [DinoSR, SpidR])
 def test_every_trainable_parameter_receives_a_gradient(
-    model_cls: type[DinoSR], request: pytest.FixtureRequest
+    model_cls: type[DinoSR], layer_drop: float, request: pytest.FixtureRequest
 ) -> None:
-    """Without layer drop there must be no unused parameters, or DDP needs find_unused_parameters."""
+    """Dropped layers still get (zero) gradients, so DDP never needs find_unused_parameters."""
     cfg = tiny_config(model_cls, request)
-    model = model_cls(dataclasses.replace(cfg, encoder_layer_drop=0.0)).train()
+    model = model_cls(dataclasses.replace(cfg, encoder_layer_drop=layer_drop)).train()
     waveforms, mask_indices = make_inputs()
     model(waveforms, mask_indices=mask_indices)[0].mean().backward()
     without_grad = [name for name, p in model.named_parameters() if p.requires_grad and p.grad is None]

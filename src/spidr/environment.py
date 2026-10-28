@@ -73,16 +73,21 @@ def setup_distributed() -> None:
     logger.debug("DDP initialized")
 
 
+def jobscratch() -> Path | None:
+    if (jobscratch := os.getenv("JOBSCRATCH")) is not None:
+        return Path(jobscratch)
+    if (job_id := os.getenv("SLURM_JOB_ID")) is not None and (Path("/scratch") / job_id).is_dir():
+        return Path("/scratch") / job_id
+    return None
+
+
 def setup_environment(**kwargs: str) -> None:
-    if "SLURM_JOB_ID" in os.environ and (Path("/scratch") / os.environ["SLURM_JOB_ID"]).is_dir():
-        cache = Path("/scratch") / os.environ["SLURM_JOB_ID"]
-    else:
-        cache = Path(torch._appdirs.user_cache_dir(appname="spidr"))
+    if (scratch := jobscratch()) is not None:
+        kwargs.setdefault("TMPDIR", str(scratch))
+    cache = Path(torch._appdirs.user_cache_dir(appname="spidr"))
     cache.mkdir(exist_ok=True, parents=True)
-    (cache / "tmp").mkdir(exist_ok=True)
-    kwargs["TMPDIR"] = str(cache / "tmp")
-    kwargs["TORCHINDUCTOR_CACHE_DIR"] = str(cache / "torchinductor")
-    kwargs["TRITON_HOME"] = str(cache)
+    kwargs.setdefault("TORCHINDUCTOR_CACHE_DIR", os.getenv("TORCHINDUCTOR_CACHE_DIR", str(cache / "torchinductor")))
+    kwargs.setdefault("TRITON_HOME", os.getenv("TRITON_HOME", str(cache)))
 
     for name, value in kwargs.items():
         if os.getenv(name) != str(value):

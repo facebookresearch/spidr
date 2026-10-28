@@ -93,15 +93,8 @@ def train(cfg: Config) -> None:
             launch_validation(cfg, ResumeConfig(step=step, checkpoint=ckpt.last, results=ckpt.metrics))
         if cfg.run.compile:
             model.compile(dynamic=True)
+        ddp_model = DistributedDataParallel(model, device_ids=[device.index])
 
-        def wrap_ddp() -> DistributedDataParallel:
-            return DistributedDataParallel(
-                model,
-                device_ids=[device.index],
-                find_unused_parameters=cfg.model.encoder_layer_drop > 0,
-            )
-
-        ddp_model = wrap_ddp()
         logger.info("Starting training loop")
         meters = AverageMeters(["loss", "grad_norm", "batch_size", "target_ppl", "pred_ppl"], device=device)
         profiler = stack.enter_context(profiler_context(cfg.run.dir / "trace.html" if is_main else None))
@@ -136,7 +129,7 @@ def train(cfg: Config) -> None:
                     torch.compiler.reset()
                 if step == cfg.model.freeze_step and len(optimizer.param_groups) > 1:
                     remove_param_group(optimizer, scheduler, 1)
-                    ddp_model = wrap_ddp()  # So DDP stops expecting gradients for feature extractor
+                    ddp_model = DistributedDataParallel(model, device_ids=[device.index])
                 meters.update(loss=loss.detach(), batch_size=waveforms.size(0), grad_norm=grad_norm, **outputs)
                 pbar.update()
                 if is_main and step % cfg.run.log_interval == 0:
