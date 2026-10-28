@@ -17,17 +17,18 @@ logger = logging.getLogger()
 
 
 @torch.no_grad()
-def validate(model: DinoSR, loader: DataLoader, device: torch.device) -> dict[str, float]:
+def validate(model: DinoSR, loader: DataLoader, device: torch.device, dtype: torch.dtype) -> dict[str, float]:
     model.eval()
     total_loss = torch.zeros(1, device=device)
     total_target_ppl = torch.zeros(1, device=device)
     total_pred_ppl = torch.zeros(1, device=device)
     for waveforms, attn_mask, mask in loader:
-        loss, outputs = model(
-            waveforms.to(device),
-            mask_indices=mask.to(device),
-            attention_mask=attn_mask.to(device) if attn_mask is not None else None,
-        )
+        with torch.autocast(device.type, dtype, enabled=dtype != torch.float32):
+            loss, outputs = model(
+                waveforms.to(device),
+                mask_indices=mask.to(device),
+                attention_mask=attn_mask.to(device) if attn_mask is not None else None,
+            )
         total_loss += loss.mean()
         total_target_ppl += outputs["target_ppl"]
         total_pred_ppl += outputs["pred_ppl"]
@@ -48,10 +49,11 @@ def validate_existing_checkpoint(cfg: Config, resume: ResumeConfig) -> None:
         return
     logger.info("Loading model from %s", resume.checkpoint)
     model = build_model(model_type=cfg.run.model_type, checkpoint=resume.checkpoint).eval().to("cuda")
+    dtype = getattr(torch, cfg.optimizer.dtype)
     for val_name, val_cfg in cfg.validation.items():
         logger.info("Validating on %s", val_name)
         loader = build_dataloader(val_cfg, cfg.masking, conv_layer_config=cfg.model.extractor_conv_layer_config)
-        val_output = {"step": resume.step, "group": val_name} | validate(model, loader, torch.device("cuda"))
+        val_output = {"step": resume.step, "group": val_name} | validate(model, loader, torch.device("cuda"), dtype)
         logger.info("Validation on %s done: loss %s", val_name, val_output["loss"])
         with resume.results.open("a") as f:
             f.write(json.dumps(val_output) + "\n")
