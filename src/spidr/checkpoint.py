@@ -109,6 +109,7 @@ class Checkpointer:
             return False
         self._state.step.fill_(step)
         self._state.epoch.fill_(epoch)
+        tmp_path = path.with_name(path.name + ".tmp")
         torch.save(
             {
                 "model": self._state.model.state_dict(),
@@ -118,8 +119,9 @@ class Checkpointer:
                 "epoch": self.epoch,
                 "step": self.step,
             },
-            path,
+            tmp_path,
         )
+        tmp_path.replace(path)
         self._path = path
         self._purge_old_checkpoints()
         return True
