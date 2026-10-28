@@ -265,6 +265,10 @@ class SpeechCollatorWithMasking:
         enable_padding: bool,
         rand_crop: bool,
     ) -> None:
+        if mask_generator.config.mask_prob <= 0:
+            raise ValueError("Pretraining needs masked frames, set mask_prob above 0")
+        if mask_generator.config.mask_channel_prob > 0:
+            raise ValueError("Channel masking is not supported for pretraining, set mask_channel_prob to 0")
         self.mask_generator = mask_generator
         self.max_sample_size = max_sample_size
         self.conv_layer_config = conv_layer_config

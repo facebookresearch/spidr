@@ -5,7 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from spidr.config import SpidRConfig, read_config
+from spidr.config import (
+    MaskingConfig,
+    SpidRConfig,
+    read_config,
+)
+
+
+@pytest.mark.parametrize("prob", [-0.1, 1.1])
+def test_masking_config_rejects_probabilities_outside_unit_interval(prob: float) -> None:
+    with pytest.raises(ValueError, match="mask_prob must be in"):
+        MaskingConfig(mask_prob=prob)
+    with pytest.raises(ValueError, match="mask_channel_prob must be in"):
+        MaskingConfig(mask_channel_prob=prob)
 
 
 def test_read_example_config() -> None:

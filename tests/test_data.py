@@ -219,3 +219,15 @@ def test_verify_lengths_rejects_ambiguous_batching() -> None:
         verify_lengths(0, 10, None, None)
     with pytest.raises(ValueError, match="cannot be set simultaneously"):
         verify_lengths(0, 10, 8, 100)
+
+
+@pytest.mark.parametrize("masking", [MaskingConfig(mask_prob=0.0), MaskingConfig(mask_channel_prob=0.1)])
+def test_collator_rejects_masking_unsupported_for_pretraining(masking: MaskingConfig) -> None:
+    with pytest.raises(ValueError, match=r"(?i)pretraining"):
+        SpeechCollatorWithMasking(
+            MaskGenerator(masking),
+            max_sample_size=320_000,
+            conv_layer_config=CONV_LAYER_CONFIG,
+            enable_padding=False,
+            rand_crop=True,
+        )

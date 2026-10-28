@@ -23,7 +23,7 @@ def file_manifest(wav_dir: Path, tmp_path: Path) -> Path:
 @pytest.fixture
 def archive_manifest(wav_archive: Path, tmp_path: Path) -> Path:
     manifest = tmp_path / "archive.csv"
-    write_manifest_tar(str(wav_archive), manifest)
+    write_manifest_tar(wav_archive, manifest)
     return manifest
 
 

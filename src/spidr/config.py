@@ -161,6 +161,11 @@ class MaskingConfig:
     no_mask_channel_overlap: bool = False  # model.no_mask_channel_overlap
     mask_channel_min_space: int = 1  # model.mask_channel_min_space
 
+    def __post_init__(self) -> None:
+        for name in ("mask_prob", "mask_channel_prob"):
+            if not 0 <= (prob := getattr(self, name)) <= 1:
+                raise ValueError(f"{name} must be in [0, 1], but got {prob}")
+
 
 @dataclass(frozen=True)
 class Config:

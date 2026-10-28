@@ -76,7 +76,7 @@ def write_manifest_tar(dataset: Path | str, output: Path | str, file_extension: 
         .lazy()
         .with_columns(
             pl.col("path").str.strip_suffix(file_extension).str.split(os.sep).list.get(-1).alias("fileid"),
-            pl.lit(dataset).alias("archive"),
+            pl.lit(str(dataset)).alias("archive"),
         )
         .select("fileid", "path", "num_samples", "archive", "byte_offset", "byte_size")
         .sink_csv(output)
@@ -97,6 +97,6 @@ if __name__ == "__main__":
     if root.is_dir():
         (write_manifest_fairseq if args.fairseq else write_manifest)(root, args.output, args.ext)
     elif root.suffix == ".tar":
-        write_manifest_tar(root, args.ext)
+        write_manifest_tar(root, args.output, args.ext)
     else:
         raise parser.error(f"{root} is not a directory or a tar file.")
