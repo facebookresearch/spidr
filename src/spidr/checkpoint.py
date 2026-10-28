@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Meta Platforms, Inc. and affiliates.
 """Checkpoint management for training runs."""
 
+import json
 import logging
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -100,7 +101,12 @@ class Checkpointer:
         if len(checkpoints := find_checkpoints(self.folder)) <= self.keep_latest:
             return
         to_delete = checkpoints[: -self.keep_latest]
+        lines = self.metrics.read_text().splitlines() if self.metrics.is_file() else []
+        validated = {json.loads(line)["step"] for line in lines}
         for path in to_delete:
+            step = int(path.stem.removeprefix("step_"))
+            if (self.folder / "validation" / f"val-{step}").is_dir() and step not in validated:
+                continue
             logger.info("Deleting old checkpoint %s", path)
             path.unlink()
 

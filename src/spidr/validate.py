@@ -3,6 +3,7 @@
 
 import json
 import logging
+from collections import defaultdict
 
 import torch
 from torch.utils.data import DataLoader
@@ -19,9 +20,8 @@ logger = logging.getLogger()
 @torch.no_grad()
 def validate(model: DinoSR, loader: DataLoader, device: torch.device, dtype: torch.dtype) -> dict[str, float]:
     model.eval()
-    total_loss = torch.zeros(1, device=device)
-    total_target_ppl = torch.zeros(1, device=device)
-    total_pred_ppl = torch.zeros(1, device=device)
+    total_loss, num_frames, num_batches = torch.zeros((), device=device), 0, len(loader)
+    totals = defaultdict(lambda: torch.zeros((), device=device))
     for waveforms, attn_mask, mask in loader:
         with torch.autocast(device.type, dtype, enabled=dtype != torch.float32):
             loss, outputs = model(
@@ -29,13 +29,11 @@ def validate(model: DinoSR, loader: DataLoader, device: torch.device, dtype: tor
                 mask_indices=mask.to(device),
                 attention_mask=attn_mask.to(device) if attn_mask is not None else None,
             )
-        total_loss += loss.mean()
-        total_target_ppl += outputs["target_ppl"]
-        total_pred_ppl += outputs["pred_ppl"]
-    total_loss /= len(loader)
-    total_target_ppl /= len(loader)
-    total_pred_ppl /= len(loader)
-    return {"loss": total_loss.item(), "target_ppl": total_target_ppl.item(), "pred_ppl": total_pred_ppl.item()}
+        num_frames += loss.numel()
+        total_loss += loss.float().sum()
+        for name, value in outputs.items():
+            totals[name] += value.float()
+    return {"loss": (total_loss / num_frames).item()} | {n: (v / num_batches).item() for n, v in totals.items()}
 
 
 def validate_existing_checkpoint(cfg: Config, resume: ResumeConfig) -> None:

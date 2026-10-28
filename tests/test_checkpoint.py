@@ -86,3 +86,16 @@ def test_keep_latest_purges_older_checkpoints(tiny_dinosr_config: DinoSRConfig, 
         assert checkpointer.save(step, 1)
     assert sorted(path.name for path in tmp_path.glob("step_*.pt")) == ["step_20.pt", "step_30.pt"]
     assert checkpointer.last == tmp_path / "step_30.pt"
+
+
+def test_keep_latest_keeps_checkpoints_awaiting_validation(tiny_dinosr_config: DinoSRConfig, tmp_path: Path) -> None:
+    """A queued validation job loads its checkpoint later: only purge steps that already have metrics."""
+    model, optimizer, scaler, scheduler = make_state(tiny_dinosr_config, seed=0)
+    checkpointer = Checkpointer(tmp_path, interval=10, keep_latest=1)
+    checkpointer.init_state(model=model, optimizer=optimizer, scheduler=scheduler, scaler=scaler)
+    for step in (10, 20):  # Both submitted, only step 10 is done.
+        (tmp_path / "validation" / f"val-{step}").mkdir(parents=True)
+    (tmp_path / "metrics.jsonl").write_text('{"step": 10, "group": "dev", "loss": 1.0}\n')
+    for step in (10, 20, 30):
+        assert checkpointer.save(step, 1)
+    assert sorted(path.name for path in tmp_path.glob("step_*.pt")) == ["step_20.pt", "step_30.pt"]
