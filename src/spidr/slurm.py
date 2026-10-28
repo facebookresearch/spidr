@@ -28,9 +28,9 @@ def current_codebase_path() -> Path:
 
 
 def copy_code_to_submitit_folder(output_dir: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(str(importlib.resources.files(__package__))).parent.parent
-    logger.info("Copying: %s to: %s", root, output_dir)
+    package = Path(str(importlib.resources.files(__package__)))
+    (output_dir / "src").mkdir(parents=True, exist_ok=True)
+    logger.info("Copying: %s to: %s", package, output_dir)
     rsync_cmd = [
         "rsync",
         "-a",
@@ -39,10 +39,10 @@ def copy_code_to_submitit_folder(output_dir: Path) -> None:
         "--include=*/",
         "--include=*.py",
         "--exclude=*",
-        f"{root}/src/",
-        str(output_dir / "src"),
+        f"{package}/",
+        str(output_dir / "src" / package.name),
     ]
-    subprocess.call(rsync_cmd)
+    subprocess.run(rsync_cmd, check=True)
     logger.info("Copy done.")
 
 
@@ -100,25 +100,26 @@ def launch_with_submitit(
     copy_code: bool = False,
 ) -> bool:
     launch_time = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    folder = Path(dump) / job_name
+    dump = Path(dump).resolve()
+    folder = dump / job_name
     if folder.is_dir():
-        folder = Path(dump) / f"{job_name}_{launch_time}"
+        folder = dump / f"{job_name}_{launch_time}"
     folder.mkdir(parents=True)
 
     if copy_code:
         copy_code_to_submitit_folder(folder / "code")
         codebase_path = folder / "code" / "src"
-    else:  # No-op in most situations, but correctly handles nested cases
+    else:
         codebase_path = current_codebase_path()
 
     write_git_info_if_available(folder)
     job_info = {"job_name": job_name, "launch_time": launch_time} | slurm
     (folder / "job-info.json").write_text(json.dumps(job_info, indent=2))
 
-    os.chdir(codebase_path)
-    logger.info("Launching from %s", codebase_path)
+    logger.info("Launching with the code from %s", codebase_path)
+    setup = ["export PYTHONSAFEPATH=1", f'export PYTHONPATH="{codebase_path}${{PYTHONPATH:+:$PYTHONPATH}}"']
     executor = submitit.SlurmExecutor(folder=folder / "%j")
-    executor.update_parameters(job_name=job_name, ntasks_per_node=slurm["gpus_per_node"], **slurm)
+    executor.update_parameters(job_name=job_name, ntasks_per_node=slurm["gpus_per_node"], setup=setup, **slurm)
     try:
         with executor.batch():
             for fn, args in jobs:

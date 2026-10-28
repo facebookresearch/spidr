@@ -14,7 +14,8 @@ class GitInfo(NamedTuple):
 
 
 def git_available() -> bool:
-    git_cmd = ["git", "rev-parse", "--is-inside-work-tree"]
+    package = Path(str(importlib.resources.files(__package__)))
+    git_cmd = ["git", "-C", package, "ls-files", "--error-unmatch", "__init__.py"]
     try:
         return subprocess.run(git_cmd, capture_output=True, check=False, text=True).returncode == 0
     except FileNotFoundError:

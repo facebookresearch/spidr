@@ -70,7 +70,7 @@ Or if you don't want to install this library, you can use `torch.hub.load`:
 import torch
 
 spidr_model = torch.hub.load("facebookresearch/spidr", "spidr_base")
-dinosr_model = torch.hub.load("facebookresearch/spidr", "dinor_base_reproduced")
+dinosr_model = torch.hub.load("facebookresearch/spidr", "dinosr_base_reproduced")
 ```
 
 Similarly, you can use the `spidr.models.dinosr_base_original` function to load the [original DinoSR checkpoint](https://github.com/Alexander-H-Liu/dinosr).
@@ -151,6 +151,11 @@ options:
   -q QOS, --qos QOS     SLURM qos (default: None)
   --dump DUMP           Submitit dump (default: None)
 ```
+
+At launch, the code is copied to the dump folder, and every job of the run (training and validation) runs this copy:
+later local modifications do not affect them.
+The jobs run in the directory you launched from, so relative paths in the configuration are resolved from there.
+This directory must be visible from the compute nodes.
 
 By default we use torch.compile, the first batches will be quite slow to process.
 To speed up training, you can also remove the computation of the perplexities in the

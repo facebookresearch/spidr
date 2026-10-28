@@ -41,7 +41,7 @@ def distributed_environment() -> DistributedEnvironment:
         )
     elif os.getenv("SLURM_JOB_ID") is not None:  # Slurm job
         scontrol_cmd = ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]]
-        master_addr = subprocess.check_output(scontrol_cmd, text=True).split()[0]
+        master_addr = subprocess.run(scontrol_cmd, capture_output=True, check=True, text=True).stdout.split()[0]
         master_port = random.Random(int(os.environ["SLURM_JOB_ID"])).randint(20_000, 32_000)
         env = DistributedEnvironment(
             global_rank=int(os.environ["SLURM_PROCID"]),
@@ -51,7 +51,7 @@ def distributed_environment() -> DistributedEnvironment:
             master_addr=master_addr,
         )
     else:
-        env = DistributedEnvironment(  # Single GPU job
+        env = DistributedEnvironment(  # Local single-process job (no torchrun, no Slurm)
             global_rank=0,
             local_rank=0,
             world_size=1,
