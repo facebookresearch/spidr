@@ -6,6 +6,7 @@ import importlib.resources
 import json
 import logging
 import os
+import shlex
 import subprocess
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -19,12 +20,6 @@ from spidr.config import SlurmConfig
 from spidr.tools import write_git_info_if_available
 
 logger = logging.getLogger()
-
-
-def current_codebase_path() -> Path:
-    import spidr
-
-    return Path(spidr.__file__).parent.parent
 
 
 def copy_code_to_submitit_folder(output_dir: Path) -> None:
@@ -106,18 +101,22 @@ def launch_with_submitit(
         folder = dump / f"{job_name}_{launch_time}"
     folder.mkdir(parents=True)
 
+    codebase_path = folder / "code" / "src"
     if copy_code:
         copy_code_to_submitit_folder(folder / "code")
-        codebase_path = folder / "code" / "src"
     else:
-        codebase_path = current_codebase_path()
+        codebase_path.mkdir(parents=True)
+        (codebase_path / "spidr").symlink_to(Path(str(importlib.resources.files(__package__))).resolve())
 
     write_git_info_if_available(folder)
     job_info = {"job_name": job_name, "launch_time": launch_time} | slurm
     (folder / "job-info.json").write_text(json.dumps(job_info, indent=2))
 
     logger.info("Launching with the code from %s", codebase_path)
-    setup = ["export PYTHONSAFEPATH=1", f'export PYTHONPATH="{codebase_path}${{PYTHONPATH:+:$PYTHONPATH}}"']
+    setup = [
+        "export PYTHONSAFEPATH=1",
+        f'export PYTHONPATH={shlex.quote(str(codebase_path))}"${{PYTHONPATH:+:$PYTHONPATH}}"',
+    ]
     executor = submitit.SlurmExecutor(folder=folder / "%j")
     executor.update_parameters(job_name=job_name, ntasks_per_node=slurm["gpus_per_node"], setup=setup, **slurm)
     try:
