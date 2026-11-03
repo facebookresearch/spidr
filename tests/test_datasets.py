@@ -46,6 +46,43 @@ def test_write_manifest_lists_every_file(file_manifest: Path, wav_dir: Path, wav
     assert {Path(p).parent for p in manifest["path"].to_list()} == {wav_dir}
 
 
+@pytest.mark.parametrize("suffix", [".csv", ".jsonl"])
+def test_read_manifest_accepts_num_frames(file_manifest: Path, tmp_path: Path, suffix: str) -> None:
+    expected = read_manifest(file_manifest)
+    renamed_manifest = tmp_path / f"renamed{suffix}"
+    renamed = expected.rename({"num_samples": "num_frames"})
+    if suffix == ".csv":
+        renamed.write_csv(renamed_manifest)
+    else:
+        renamed.write_ndjson(renamed_manifest)
+    assert read_manifest(renamed_manifest).equals(expected)
+
+
+def test_read_manifest_drops_num_frames_matching_num_samples(file_manifest: Path, tmp_path: Path) -> None:
+    expected = read_manifest(file_manifest)
+    both = tmp_path / "both.csv"
+    expected.with_columns(num_frames=expected["num_samples"]).write_csv(both)
+    assert read_manifest(both).equals(expected)
+
+
+def test_read_manifest_rejects_disagreeing_lengths(file_manifest: Path, tmp_path: Path) -> None:
+    manifest = read_manifest(file_manifest)
+    both = tmp_path / "both.csv"
+    manifest.with_columns(num_frames=manifest["num_samples"] + 1).write_csv(both)
+    with pytest.raises(ValueError, match="disagree"):
+        read_manifest(both)
+
+
+def test_speech_dataset_reads_archive_manifest_with_num_frames(archive_manifest: Path, tmp_path: Path) -> None:
+    renamed_manifest = tmp_path / "renamed-archive.csv"
+    read_manifest(archive_manifest).rename({"num_samples": "num_frames"}).write_csv(renamed_manifest)
+    dataset = speech_dataset(renamed_manifest, normalize=False)
+    assert isinstance(dataset, SpeechDatasetFromArchive)
+    reference = speech_dataset(archive_manifest, normalize=False)
+    for index in range(len(dataset)):
+        torch.testing.assert_close(dataset[index], reference[index])
+
+
 def test_speech_dataset_dispatches_on_manifest_columns(file_manifest: Path, archive_manifest: Path) -> None:
     assert isinstance(speech_dataset(file_manifest, normalize=False), SpeechDatasetFromFiles)
     assert isinstance(speech_dataset(archive_manifest, normalize=False), SpeechDatasetFromArchive)

@@ -44,12 +44,22 @@ def bytes_from_archive(archive: Path | str, offset: int, file_size: int) -> byte
     return mmap_o[offset : offset + file_size]
 
 
+def _normalize_length_column(manifest: pl.DataFrame, path: Path) -> pl.DataFrame:
+    if "num_frames" not in manifest.columns:
+        return manifest
+    if "num_samples" not in manifest.columns:
+        return manifest.rename({"num_frames": "num_samples"})
+    if not manifest["num_frames"].equals(manifest["num_samples"]):
+        raise ValueError(f"Columns `num_samples` and `num_frames` disagree in {path}")
+    return manifest.drop("num_frames")
+
+
 def read_manifest(path: Path | str) -> pl.DataFrame:
     path = Path(path)
     if path.suffix == ".csv":
-        return pl.read_csv(path)
+        return _normalize_length_column(pl.read_csv(path), path)
     if path.suffix == ".jsonl":
-        return pl.read_ndjson(path)
+        return _normalize_length_column(pl.read_ndjson(path), path)
     if path.suffix != ".tsv":
         raise ValueError("Only .csv, .jsonl and .tsv files are supported")
     with path.open("r") as file:
