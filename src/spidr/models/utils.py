@@ -12,15 +12,17 @@ import torch
 from torch.hub import load_state_dict_from_url
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 
-from spidr.config import DinoSRConfig, ModelType, SpidRConfig, model_config_class
+from spidr.config import DinoSRConfig, ModelType, SpidR2Config, SpidRConfig, model_config_class, model_config_from_dict
 from spidr.models.dinosr import DinoSR
 from spidr.models.spidr import SpidR
+from spidr.models.spidr2 import SpidR2
 
 
 def model_class(cfg: DinoSRConfig) -> type[DinoSR]:
     models: dict[type[DinoSRConfig], type[DinoSR]] = {
         DinoSRConfig: DinoSR,
         SpidRConfig: SpidR,
+        SpidR2Config: SpidR2,
     }
     if type(cfg) not in models:
         names = [config.__name__ for config in models]
@@ -41,7 +43,7 @@ def build_model(
         config_path = Path(checkpoint).parent / "config.json"
         if config_path.is_file():
             data = json.loads(config_path.read_text(encoding="utf-8"))
-            cfg = model_config_class(model_type)(**data.get("model", data))
+            cfg = model_config_from_dict(model_type, data.get("model", data))
         else:
             warnings.warn("Config file not found when loading checkpoint. Using default config.", stacklevel=2)
             cfg = model_config_class(model_type)()
@@ -174,6 +176,23 @@ def spidr_base(*, pretrained: bool = True, check_hash: bool = False, progress: b
     if pretrained:
         url = "https://dl.fbaipublicfiles.com/shared/devai/assets/models/spidr_base.pt"
         checkpoint = load_state_dict_from_url(url, check_hash=check_hash, progress=progress, map_location="cpu")
+        model.load_state_dict(checkpoint["model"])
+    model.eval()
+    return model
+
+
+def spidr2_base(*, pretrained: bool = True, check_hash: bool = False, progress: bool = True) -> SpidR2:
+    model = SpidR2(SpidR2Config())
+    if pretrained:
+        url = "https://dl.fbaipublicfiles.com/shared/devai/assets/gslm2/checkpoints/spidr-2.0/final.pt"
+        checkpoint = load_state_dict_from_url(
+            url,
+            check_hash=check_hash,
+            progress=progress,
+            map_location="cpu",
+            file_name="spidr2_base.pt",
+            weights_only=True,
+        )
         model.load_state_dict(checkpoint["model"])
     model.eval()
     return model

@@ -3,7 +3,9 @@
 
 import dataclasses
 import json
+import math
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -13,8 +15,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from torch import nn
 
-from spidr.config import DinoSRConfig, ModelType, SpidRConfig, model_config_class
-from spidr.models import DinoSR, SpidR, build_model
+from spidr.config import DinoSRConfig, EntropySchedule, ModelType, SpidR2Config, SpidRConfig, model_config_class
+from spidr.models import DinoSR, SpidR, SpidR2, build_model, spidr2_base
 from spidr.models.components import (
     Codebook,
     Codebooks,
@@ -24,6 +26,7 @@ from spidr.models.components import (
     select_masked,
 )
 from spidr.models.dinosr import _split_ema_targets
+from spidr.models.spidr2 import entropy_scheduler
 from spidr.models.utils import model_class
 from spidr.tools import AverageMeters
 
@@ -35,6 +38,7 @@ NUM_MASKED = 15
 CONFIG_FIXTURES: dict[type[DinoSR], str] = {
     DinoSR: "tiny_dinosr_config",
     SpidR: "tiny_spidr_config",
+    SpidR2: "tiny_spidr2_config",
 }
 MODEL_CLASSES = list(CONFIG_FIXTURES)
 
@@ -159,8 +163,9 @@ class RecordTorchOps(torch.overrides.TorchFunctionMode):
 def test_forward_does_not_sync_with_the_host(model_cls: type[DinoSR], request: pytest.FixtureRequest) -> None:
     """The masked frames come from precomputed positions, so `torch.nonzero` no longer syncs here.
 
-    The output is compared against eager too, to catch a rewrite that traces cleanly but selects the
-    wrong frames.
+    SpidR2 schedules its entropy weights from the `current_step` buffer, which must not be read back
+    to the host either. The output is compared against eager too, to catch a rewrite that traces
+    cleanly but selects the wrong frames.
     """
     waveforms, mask_indices = make_inputs()
     model = model_cls(tiny_config(model_cls, request)).eval()
@@ -357,6 +362,147 @@ def test_codebooks_update_in_train_but_not_eval(tiny_spidr_config: SpidRConfig) 
     assert all(torch.equal(b, c.codebook) for b, c in zip(before, model.codebooks, strict=True))
 
 
+def test_spidr2_has_no_codebooks(tiny_spidr2_config: SpidR2Config) -> None:
+    """SpidR2 quantizes with the heads applied to the teacher, so it carries no codebook at all."""
+    waveforms, mask_indices = make_inputs()
+    model = SpidR2(tiny_spidr2_config).train()
+    assert not hasattr(model, "codebooks")
+    assert not [key for key in model.state_dict() if key.startswith("codebooks.")]
+    assert model.num_codebooks == tiny_spidr2_config.num_codebooks  # Counted from the heads instead.
+
+    outputs = model(waveforms, mask_indices=mask_indices)[1]
+    # Cross entropy against a soft target cannot go below the entropy of that target; against the
+    # one-hot target of SpidR it could.
+    assert outputs["loss_no_reg"] >= outputs["teacher_predictive_entropy"]
+
+
+@pytest.mark.parametrize("prefix", ["", "module."])
+def test_spidr2_loads_a_state_dict_with_codebooks(
+    tiny_spidr2_config: SpidR2Config, tiny_spidr_config: SpidRConfig, prefix: str
+) -> None:
+    """The released SpidR 2.0 checkpoint holds codebooks: they are dropped, even when SpidR2 is wrapped like in DDP."""
+    source = SpidR2(tiny_spidr2_config)
+    codebooks = {name: value for name, value in SpidR(tiny_spidr_config).state_dict().items() if "codebooks." in name}
+    assert codebooks
+    state_dict = {f"{prefix}{name}": value for name, value in (source.state_dict() | codebooks).items()}
+    model = SpidR2(tiny_spidr2_config)
+    (nn.ModuleDict({"module": model}) if prefix else model).load_state_dict(state_dict)
+    for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
+        torch.testing.assert_close(expected, actual)
+
+
+def test_spidr2_loss_is_the_cross_entropy_plus_the_scheduled_entropy_terms(tiny_spidr2_config: SpidR2Config) -> None:
+    """Predictive entropy is penalised, codebook entropy is rewarded, both on the reported scale."""
+    torch.manual_seed(0)
+    model = SpidR2(dataclasses.replace(tiny_spidr2_config, reg_student=True, reg_teacher=True)).eval()
+    waveforms, mask_indices = make_inputs()
+    with torch.no_grad():
+        losses, outputs = model(waveforms, mask_indices=mask_indices)
+
+    expected = (
+        outputs["loss_no_reg"]
+        + outputs["predictive_entropy_weight"]
+        * (outputs["student_predictive_entropy"] + outputs["teacher_predictive_entropy"])
+        - outputs["codebook_entropy_weight"]
+        * (outputs["student_codebook_entropy"] + outputs["teacher_codebook_entropy"])
+    )
+    torch.testing.assert_close(losses.mean(), expected)
+
+
+def test_spidr2_regularises_only_the_configured_side(tiny_spidr2_config: SpidR2Config) -> None:
+    """Both sides are optional, and the reported loss is the unregularised one either way."""
+    waveforms, mask_indices = make_inputs()
+    losses, reported = {}, {}
+    for reg_student, reg_teacher in ((False, False), (True, False), (False, True)):
+        torch.manual_seed(0)
+        cfg = dataclasses.replace(tiny_spidr2_config, reg_student=reg_student, reg_teacher=reg_teacher)
+        with torch.no_grad():
+            loss, outputs = SpidR2(cfg).eval()(waveforms, mask_indices=mask_indices)
+        losses[reg_student, reg_teacher] = loss.mean()
+        reported[reg_student, reg_teacher] = outputs["loss_no_reg"]
+
+    # Same weights and inputs, so the same cross entropy whatever is regularised.
+    assert all(torch.equal(value, reported[False, False]) for value in reported.values())
+    torch.testing.assert_close(losses[False, False], reported[False, False])
+    assert not torch.equal(losses[True, False], losses[False, False])
+    assert not torch.equal(losses[False, True], losses[False, False])
+    assert not torch.equal(losses[True, False], losses[False, True])
+
+
+def test_spidr2_entropy_weights_follow_the_training_step(tiny_spidr2_config: SpidR2Config) -> None:
+    """The weights are read from the `current_step` buffer, which `update_ema` advances."""
+    cfg = dataclasses.replace(
+        tiny_spidr2_config,
+        codebook_entropy_constant_steps=2,
+        codebook_entropy_max_steps=8,
+        codebook_entropy_timescale=1.0,
+    )
+    model = SpidR2(cfg).eval()
+    waveforms, mask_indices = make_inputs()
+    with torch.no_grad():
+        early = model(waveforms, mask_indices=mask_indices)[1]
+        model.update_ema(step=5)
+        late = model(waveforms, mask_indices=mask_indices)[1]
+
+    assert early["codebook_entropy_weight"].item() == pytest.approx(cfg.codebook_entropy_weight)
+    assert cfg.codebook_entropy_final_weight < late["codebook_entropy_weight"].item() < cfg.codebook_entropy_weight
+    # The predictive schedule is constant by default, so it must not move.
+    assert late["predictive_entropy_weight"].item() == early["predictive_entropy_weight"].item()
+
+
+def scheduled(
+    step: int,
+    schedule: EntropySchedule = "constant_then_exponential_decrease",
+    weight: float = 0.1,
+    final_weight: float = 0.001,
+    timescale: float = 5.0,
+) -> float:
+    return entropy_scheduler(
+        torch.tensor(step),
+        weight=weight,
+        schedule=schedule,
+        constant_steps=10,
+        max_steps=100,
+        timescale=timescale,
+        final_weight=final_weight,
+    ).item()
+
+
+def close_to(value: float) -> object:
+    """The schedule runs in float32, so the reference values are only approached."""
+    return pytest.approx(value, rel=1e-5)
+
+
+def test_entropy_scheduler_holds_then_decays_to_the_final_weight() -> None:
+    assert scheduled(0) == close_to(0.1)
+    assert scheduled(10) == close_to(0.1)
+    assert scheduled(15) == close_to(0.1 * math.exp(-1))
+    assert scheduled(90) == close_to(0.001)  # Floored at the final weight.
+    assert scheduled(1_000) == close_to(0.001)
+
+
+def test_entropy_scheduler_holds_then_grows_to_the_final_weight() -> None:
+    growing = partial(scheduled, schedule="constant_then_exponential_increase", weight=0.001, final_weight=0.1)
+    assert growing(0) == close_to(0.001)
+    assert growing(10) == close_to(0.001)
+    assert growing(15) == close_to(0.1 - (0.1 - 0.001) * math.exp(-1))
+    assert growing(1_000) == close_to(0.1)
+
+
+def test_entropy_scheduler_ignores_the_schedule_of_a_disabled_term() -> None:
+    assert scheduled(1_000, schedule="constant") == close_to(0.1)
+    assert scheduled(1_000, weight=0.0) == close_to(0.0)
+
+
+def test_build_model_dispatches_on_the_config_class(
+    tiny_spidr2_config: SpidR2Config, tiny_spidr_config: SpidRConfig, tiny_dinosr_config: DinoSRConfig
+) -> None:
+    """`SpidR2Config` subclasses `SpidRConfig`, so the dispatch must use the exact config class."""
+    assert type(build_model(cfg=tiny_spidr2_config)) is SpidR2
+    assert type(build_model(cfg=tiny_spidr_config)) is SpidR
+    assert type(build_model(cfg=tiny_dinosr_config)) is DinoSR
+
+
 def test_every_model_type_has_a_model_class_and_a_tiny_config() -> None:
     """Adding a model type without registering its model, or without a tiny config for the tests above, must fail."""
     models = {model_class(model_config_class(model_type)()) for model_type in get_args(ModelType)}
@@ -372,17 +518,18 @@ def test_model_class_rejects_unknown_config_class() -> None:
         model_class(UnknownConfig())
 
 
+@pytest.mark.parametrize("model_type", get_args(ModelType))
 def test_build_model_from_checkpoint_reads_the_config_next_to_it(
-    tiny_spidr_config: SpidRConfig,
-    tmp_path: Path,
+    model_type: ModelType, request: pytest.FixtureRequest, tmp_path: Path
 ) -> None:
     """Without `cfg`, the model config comes from the `config.json` written by training next to the checkpoint."""
-    cfg = dataclasses.replace(tiny_spidr_config, freeze_step=123)
-    source = SpidR(cfg)
+    model_cls = model_class(model_config_class(model_type)())
+    cfg = dataclasses.replace(tiny_config(model_cls, request), freeze_step=123)
+    source = model_cls(cfg)
     torch.save({"model": source.state_dict()}, tmp_path / "ckpt.pt")
     (tmp_path / "config.json").write_text(json.dumps({"model": dataclasses.asdict(cfg)}))
-    model = cast("SpidR", build_model(model_type="spidr", checkpoint=tmp_path / "ckpt.pt"))
-    assert type(model) is SpidR
+    model = build_model(model_type=model_type, checkpoint=tmp_path / "ckpt.pt")
+    assert type(model) is model_cls
     assert model.freeze_step == 123
     for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
         torch.testing.assert_close(expected, actual)
@@ -393,16 +540,38 @@ def test_build_model_requires_cfg_or_checkpoint_and_model_type() -> None:
         build_model(model_type="spidr")
 
 
-def test_build_model_with_cfg_and_checkpoint_keeps_the_cfg(tiny_spidr_config: SpidRConfig, tmp_path: Path) -> None:
+def test_build_model_with_cfg_and_checkpoint_keeps_the_cfg(tiny_spidr2_config: SpidR2Config, tmp_path: Path) -> None:
     """`run.init_ckpt` only brings weights: the `config.json` next to the checkpoint must not override `cfg.model`."""
-    source = SpidR(tiny_spidr_config)
+    source = SpidR2(tiny_spidr2_config)
     torch.save({"model": source.state_dict()}, tmp_path / "init.pt")
-    (tmp_path / "config.json").write_text(json.dumps({"model": dataclasses.asdict(tiny_spidr_config)}))
-    cfg = dataclasses.replace(tiny_spidr_config, freeze_step=123)
-    model = cast("SpidR", build_model(cfg=cfg, checkpoint=tmp_path / "init.pt"))
+    (tmp_path / "config.json").write_text(json.dumps({"model": dataclasses.asdict(tiny_spidr2_config)}))
+    cfg = dataclasses.replace(tiny_spidr2_config, freeze_step=123, codebook_entropy_weight=0.5)
+    model = cast("SpidR2", build_model(cfg=cfg, checkpoint=tmp_path / "init.pt"))
+    assert model.cfg == cfg
     assert model.freeze_step == 123
     for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
         torch.testing.assert_close(expected, actual)
+
+
+def test_build_model_loads_a_released_spidr2_checkpoint(
+    tiny_spidr2_config: SpidR2Config, tiny_released_spidr2_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """The config.json next to the released checkpoint is converted to a `SpidR2Config`."""
+    source = SpidR2(tiny_spidr2_config)
+    torch.save({"model": source.state_dict()}, tmp_path / "final.pt")
+    (tmp_path / "config.json").write_text(json.dumps(tiny_released_spidr2_config))
+    model = cast("SpidR2", build_model(model_type="spidr2", checkpoint=tmp_path / "final.pt"))
+    assert type(model) is SpidR2
+    assert json.dumps(dataclasses.asdict(model.cfg)) == json.dumps(dataclasses.asdict(tiny_spidr2_config))
+    for expected, actual in zip(source.state_dict().values(), model.state_dict().values(), strict=True):
+        torch.testing.assert_close(expected, actual)
+
+
+def test_spidr2_base_builds_the_default_model_in_eval_mode() -> None:
+    model = spidr2_base(pretrained=False)
+    assert type(model) is SpidR2
+    assert model.cfg == SpidR2Config()
+    assert not model.training
 
 
 def test_codebook_state_dict_keys_are_stable(tiny_spidr_config: SpidRConfig) -> None:

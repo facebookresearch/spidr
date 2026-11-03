@@ -1,0 +1,16 @@
+[run]
+workdir = "/path/to/workdir"
+wandb_mode = "offline"
+wandb_project = "spidr2"
+wandb_name = "spidr2-librispeech"
+model_type = "spidr2"
+
+[optimizer]
+lr = 2e-4  # As in the GSLM2 paper
+
+[data]
+manifest = "/path/to/manifests/train-full.csv"
+
+[validation]
+dev-clean.manifest = "/path/to/manifests/dev-clean.csv"
+dev-other.manifest = "/path/to/manifests/dev-other.csv"

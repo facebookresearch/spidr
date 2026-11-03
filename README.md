@@ -4,6 +4,11 @@
 
 This repository contains the checkpoints and training code for the self-supervised speech models from the SpidR paper.
 
+> [!NOTE]
+> We also provide SpidR 2.0 here for convenience.
+> Check out its reference implementation in [facebookresearch/gslm2](https://github.com/facebookresearch/gslm2),
+> along with spoken language modeling, the vocoder, and much more!
+
 ## Overview
 
 ![SpidR architecture](https://github.com/facebookresearch/spidr/blob/main/paper/figures/model.svg)
@@ -75,7 +80,10 @@ dinosr_model = torch.hub.load("facebookresearch/spidr", "dinosr_base_reproduced"
 
 Similarly, you can use the `spidr.models.dinosr_base_original` function to load the [original DinoSR checkpoint](https://github.com/Alexander-H-Liu/dinosr).
 
-The forward function of SpidR and DinoSR returns the loss and the perplexities.
+You can also load the [SpidR 2.0 checkpoint](https://github.com/facebookresearch/gslm2/blob/main/docs/model-zoo.md) released with GSLM2,
+pretrained on LibriSpeech 960h, with `spidr.models.spidr2_base` or `torch.hub.load("facebookresearch/spidr", "spidr2_base")`.
+
+The forward function of SpidR, SpidR 2.0 and DinoSR returns the loss and the perplexities.
 To get intermediate representations use the `get_intermediate_outputs` method, or the `get_codebooks` method
 if you prefer to extract the codebook predictions from the student model.
 
@@ -114,7 +122,10 @@ options:
 
 Create a TOML configuration file for the training run. This will be used to create an instance of `spidr.config.Config`.
 Check out `src/spidr/config.py` to see the available fields.
-You can start from `configs/example.toml` (it only specifies the required fields).
+You can start from `configs/spidr.toml` (it only specifies the required fields) for SpidR and `config/spidr2.toml` for SpidR 2.0.
+
+> [!WARNING]
+> For SpidR 2.0, set the learning rate to 2e-4 if you want to follow GSLM2 setup.
 
 #### Training
 
@@ -181,3 +192,4 @@ source code if you do not care about it.
 ## License
 
 The source code and our two model checkpoints are provided under the CC BY-NC 4.0 License.
+The SpidR 2.0 checkpoint is also distributed under the CC BY-NC 4.0 License.

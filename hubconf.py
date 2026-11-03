@@ -8,4 +8,9 @@ from torch.hub import _add_to_sys_path
 dependencies = ["torch", "numpy"]
 
 with _add_to_sys_path(str(Path(__file__).parent / "src")):
-    from spidr.models import dinosr_base_original, dinosr_base_reproduced, spidr_base  # ruff: ignore[unused-import]
+    from spidr.models import (  # ruff: ignore[unused-import]
+        dinosr_base_original,
+        dinosr_base_reproduced,
+        spidr2_base,
+        spidr_base,
+    )

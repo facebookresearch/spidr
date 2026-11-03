@@ -1,15 +1,17 @@
 # Copyright (c) 2025 Meta Platforms, Inc. and affiliates.
 """Shared fixtures: tiny model configurations and small audio corpora that run quickly on CPU."""
 
+import json
 import tarfile
+from dataclasses import asdict
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import pytest
 import torch
 from torchcodec.encoders import AudioEncoder
 
-from spidr.config import SAMPLE_RATE, DinoSRConfig, SpidRConfig
+from spidr.config import SAMPLE_RATE, DinoSRConfig, SpidR2Config, SpidRConfig
 
 
 class _TinyModelKwargs(TypedDict):
@@ -49,6 +51,31 @@ def tiny_dinosr_config() -> DinoSRConfig:
 @pytest.fixture
 def tiny_spidr_config() -> SpidRConfig:
     return SpidRConfig(**TINY_MODEL_KWARGS)
+
+
+@pytest.fixture
+def tiny_spidr2_config() -> SpidR2Config:
+    return SpidR2Config(**TINY_MODEL_KWARGS)
+
+
+@pytest.fixture
+def tiny_released_spidr2_config(tiny_spidr2_config: SpidR2Config) -> dict[str, Any]:
+    """`tiny_spidr2_config` laid out like the released SpidR 2.0 config.json."""
+    nested = {"reg_student", "reg_teacher"} | {name for name in asdict(tiny_spidr2_config) if "_entropy_" in name}
+    model = {name: value for name, value in asdict(tiny_spidr2_config).items() if name not in nested}
+    model["regularisation"] = {name: getattr(tiny_spidr2_config, name) for name in nested}
+    model |= {
+        "teacher_use_heads": True,
+        "use_soft_targets": True,
+        "heads_layer_norm": "center",
+        "heads_use_weight_norm": True,
+        "heads_init": "sphere",
+        "feature_grad_mult": 1.0,
+        "ema_final": 1.0,
+        "unfreeze_encoder_step": 0,
+        "extractor_channels_last": True,
+    }
+    return json.loads(json.dumps({"run": {"model_type": "spidr"}, "model": model}))
 
 
 @pytest.fixture(scope="session")

@@ -7,13 +7,14 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import ascii_lowercase, digits
-from typing import Literal, NotRequired, TypedDict, get_args
+from typing import Any, Literal, NotRequired, TypedDict, get_args
 
 SAMPLE_RATE: int = 16_000
 DEFAULT_CONV_LAYER_CONFIG: list[tuple[int, int, int]] = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512, 2, 2)] * 2
 
 MaskingStrategy = Literal["static", "uniform", "normal", "poisson"]
-ModelType = Literal["dinosr", "spidr"]
+ModelType = Literal["dinosr", "spidr", "spidr2"]
+EntropySchedule = Literal["constant", "constant_then_exponential_decrease", "constant_then_exponential_increase"]
 
 
 class SlurmConfig(TypedDict):
@@ -151,14 +152,94 @@ class SpidRConfig(DinoSRConfig):
     encoder_layer_drop: float = 0.0  # model.encoder_layerdrop
 
 
+@dataclass(frozen=True)
+class SpidR2Config(SpidRConfig):
+    """SpidR2 configuration."""
+
+    # Which components to regularise (add entropy term to loss)
+    reg_student: bool = False
+    reg_teacher: bool = True
+
+    # Predictive Entropy: H(P(Z|Y)) - entropy of individual predictions
+    predictive_entropy_weight: float = 0.1
+    predictive_entropy_schedule: EntropySchedule = "constant"
+    predictive_entropy_constant_steps: int = 20_000
+    predictive_entropy_max_steps: int = 350_000
+    predictive_entropy_timescale: float = 0.5
+    predictive_entropy_final_weight: float = 0.0
+
+    # Codebook Entropy: H(E[Z|Y]) - entropy of mean probabilities (encourages uniform codebook usage)
+    codebook_entropy_weight: float = 0.1
+    codebook_entropy_schedule: EntropySchedule = "constant_then_exponential_decrease"
+    codebook_entropy_constant_steps: int = 20_000
+    codebook_entropy_max_steps: int = 350_000
+    codebook_entropy_timescale: float = 0.1
+    codebook_entropy_final_weight: float = 0.001
+
+    def __post_init__(self) -> None:
+        for name in ("predictive", "codebook"):
+            weight = getattr(self, f"{name}_entropy_weight")
+            schedule = getattr(self, f"{name}_entropy_schedule")
+            timescale = getattr(self, f"{name}_entropy_timescale")
+            final_weight = getattr(self, f"{name}_entropy_final_weight")
+            if schedule not in get_args(EntropySchedule):
+                raise ValueError(f"Unknown {name} entropy schedule: {schedule}")
+            if not weight or schedule == "constant":  # The term is disabled, or has nothing to schedule.
+                continue
+            if timescale <= 0:
+                raise ValueError(f"{name}_entropy_timescale must be positive for {schedule}, but got {timescale}")
+            if schedule == "constant_then_exponential_decrease" and final_weight >= weight:
+                raise ValueError(
+                    f"For {schedule}, {name}_entropy_final_weight ({final_weight}) "
+                    f"must be smaller than {name}_entropy_weight ({weight})"
+                )
+            if schedule == "constant_then_exponential_increase" and final_weight <= weight:
+                raise ValueError(
+                    f"For {schedule}, {name}_entropy_final_weight ({final_weight}) "
+                    f"must be greater than {name}_entropy_weight ({weight})"
+                )
+
+
 def model_config_class(model_type: ModelType) -> type[DinoSRConfig]:
     configs: dict[ModelType, type[DinoSRConfig]] = {
         "dinosr": DinoSRConfig,
         "spidr": SpidRConfig,
+        "spidr2": SpidR2Config,
     }
     if model_type not in configs:
         raise ValueError(f"Unknown model type {model_type!r}, expected one of {get_args(ModelType)}.")
     return configs[model_type]
+
+
+def from_released_spidr2(model_type: ModelType, data: dict[str, Any]) -> dict[str, Any]:
+    if model_type != "spidr2":
+        raise ValueError(f"This is the config of a SpidR 2.0 model, but model_type is {model_type!r}, not 'spidr2'.")
+    released_spidr2_recipe = {
+        "teacher_use_heads": True,
+        "use_soft_targets": True,
+        "heads_layer_norm": "center",
+        "heads_use_weight_norm": True,
+    }
+    for name, value in released_spidr2_recipe.items():
+        if data.get(name) != value:
+            raise ValueError(f"Unsupported {name}={data.get(name)!r}, SpidR 2.0 uses {value!r}.")
+    # Fields without a counterpart: they only affect the initialization, the speed, or the training schedule.
+    # The `regularisation` block is flattened instead.
+    excluded = released_spidr2_recipe.keys() | {
+        "heads_init",
+        "extractor_channels_last",
+        "feature_grad_mult",
+        "ema_final",
+        "unfreeze_encoder_step",
+        "regularisation",
+    }
+    return {name: value for name, value in data.items() if name not in excluded} | data.get("regularisation", {})
+
+
+def model_config_from_dict(model_type: ModelType, data: dict[str, Any]) -> DinoSRConfig:
+    if "teacher_use_heads" in data:  # Config of the released SpidR 2.0 checkpoint.
+        data = from_released_spidr2(model_type, data)
+    return model_config_class(model_type)(**data)
 
 
 @dataclass(frozen=True)
@@ -214,7 +295,7 @@ def read_config(path: str | Path) -> Config:
     return Config(
         run=run,
         data=DataConfig(**data["data"]),
-        model=model_config_class(run.model_type)(**data.get("model", {})),
+        model=model_config_from_dict(run.model_type, data.get("model", {})),
         optimizer=OptimizerConfig(**data.get("optimizer", {})),
         masking=MaskingConfig(**data.get("masking", {})),
         validation={k: DataConfig(**v) for k, v in data["validation"].items()} if "validation" in data else {},
