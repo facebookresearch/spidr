@@ -1,10 +1,12 @@
 # Copyright (c) 2025 Meta Platforms, Inc. and affiliates.
 """Configuration dataclasses."""
 
+import hashlib
 import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from string import ascii_lowercase, digits
 from typing import Literal, NotRequired, TypedDict, get_args
 
 SAMPLE_RATE: int = 16_000
@@ -24,6 +26,7 @@ class SlurmConfig(TypedDict):
     mem_per_gpu: NotRequired[str]
     constraint: NotRequired[str]
     partition: NotRequired[str]
+    exclude: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,11 @@ class RunConfig:
     @property
     def dir(self) -> Path:
         return Path(self.workdir).resolve() / self.wandb_project / self.wandb_name
+
+    @property
+    def wandb_id(self) -> str:
+        value = int.from_bytes(hashlib.sha256(str(self.dir).encode()).digest())
+        return "".join((ascii_lowercase + digits)[(value // 36**i) % 36] for i in range(8))  # Same as wandb default
 
 
 @dataclass(frozen=True)

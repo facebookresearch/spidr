@@ -27,6 +27,7 @@ if __name__ == "__main__":
     parser.add_argument("-C", "--constraint", type=str, help="Slurm constraint", default=cluster.get("constraint"))
     parser.add_argument("-p", "--partition", type=str, help="Slurm partition", default=cluster.get("partition"))
     parser.add_argument("-q", "--qos", type=str, help="Slurm QoS", default=cluster.get("qos"))
+    parser.add_argument("-x", "--exclude", type=str, help="Slurm nodes to exclude", default=cluster.get("exclude"))
     parser.add_argument("--dump", type=Path, help="Submitit dump", default=os.getenv("SPIDR_SUBMITIT_FOLDER"))
     args = parser.parse_args()
 

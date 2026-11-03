@@ -124,9 +124,9 @@ You can launch a training run from your terminal:
 
 ```bash
 ❯ python -m spidr --help
-usage: __main__.py [-h] -A ACCOUNT -N NODES -G GPUS_PER_NODE [-c CPUS_PER_TASK] [--mem-per-gpu MEM_PER_GPU] [-t TIME]
-                   [-C CONSTRAINT] [-q QOS] [--dump DUMP]
-                   configs [configs ...]
+usage: python -m spidr [-h] -A ACCOUNT -N NODES -G GPUS_PER_NODE [-c CPUS_PER_TASK] [--mem-per-gpu MEM_PER_GPU]
+                       [-t TIME] [-C CONSTRAINT] [-p PARTITION] [-q QOS] [-x EXCLUDE] [--dump DUMP]
+                       configs [configs ...]
 
 Launch training runs.
 
@@ -135,20 +135,23 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -A ACCOUNT, --account ACCOUNT
-                        SLURM account (default: None)
-  -N NODES, --nodes NODES
-                        Number of nodes (default: None)
-  -G GPUS_PER_NODE, --gpus-per-node GPUS_PER_NODE
+  -A, --account ACCOUNT
+                        Slurm account (default: None)
+  -N, --nodes NODES     Number of nodes (default: None)
+  -G, --gpus-per-node GPUS_PER_NODE
                         GPUs per node (default: None)
-  -c CPUS_PER_TASK, --cpus-per-task CPUS_PER_TASK
+  -c, --cpus-per-task CPUS_PER_TASK
                         CPUs per task (default: None)
   --mem-per-gpu MEM_PER_GPU
                         Memory per GPU (default: None)
-  -t TIME, --time TIME  Time limit in minutes (default: None)
-  -C CONSTRAINT, --constraint CONSTRAINT
-                        SLURM constraint (default: None)
-  -q QOS, --qos QOS     SLURM qos (default: None)
+  -t, --time TIME       Time limit in minutes (default: None)
+  -C, --constraint CONSTRAINT
+                        Slurm constraint (default: None)
+  -p, --partition PARTITION
+                        Slurm partition (default: None)
+  -q, --qos QOS         Slurm QoS (default: None)
+  -x, --exclude EXCLUDE
+                        Slurm nodes to exclude (default: None)
   --dump DUMP           Submitit dump (default: None)
 ```
 

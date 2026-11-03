@@ -38,6 +38,8 @@ def init_wandb(cfg: Config) -> None:
         mode=cfg.run.wandb_mode,
         dir=Path(cfg.run.workdir).resolve(),
         config=dataclasses.asdict(cfg),
+        id=cfg.run.wandb_id,
+        resume="allow",
     )
     wandb.define_metric("train/step")
     wandb.define_metric("train/*", step_metric="train/step")

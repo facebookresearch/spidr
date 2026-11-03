@@ -10,6 +10,7 @@ from spidr.config import (
     DinoSRConfig,
     MaskingConfig,
     ModelType,
+    RunConfig,
     SpidRConfig,
     model_config_class,
     read_config,
@@ -48,3 +49,20 @@ def test_read_config_rejects_unknown_format(tmp_path: Path) -> None:
     path.write_text("run: {}")
     with pytest.raises(ValueError, match="Unsupported config file format"):
         read_config(path)
+
+
+def test_wandb_id_is_stable_for_a_run_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = RunConfig(workdir=str(tmp_path), wandb_project="project", wandb_name="name")
+    assert len(run.wandb_id) == 8
+    assert set(run.wandb_id) <= set("abcdefghijklmnopqrstuvwxyz0123456789")
+    monkeypatch.chdir(tmp_path)
+    assert RunConfig(workdir=".", wandb_project="project", wandb_name="name").wandb_id == run.wandb_id
+    assert not run.dir.exists()
+
+
+def test_wandb_id_differs_across_run_directories(tmp_path: Path) -> None:
+    ids = {
+        RunConfig(workdir=str(tmp_path / workdir), wandb_project=project, wandb_name=name).wandb_id
+        for workdir, project, name in [("a", "p", "n"), ("b", "p", "n"), ("a", "q", "n"), ("a", "p", "m")]
+    }
+    assert len(ids) == 4
